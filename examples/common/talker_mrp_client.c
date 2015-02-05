@@ -41,7 +41,7 @@ int control_socket = -1;
 volatile int halt_tx = 0;
 volatile int listeners = 0;
 volatile int mrp_okay;
-volatile int mrp_error = 0;;
+volatile int mrp_error = 0;
 
 volatile int domain_a_valid = 0;
 int domain_class_a_id = 0;
@@ -153,7 +153,7 @@ int process_mrp_msg(char *buf, int buflen)
 			if (memcmp
 			    (recovered_streamid, monitor_stream_id,
 			     sizeof(recovered_streamid)) == 0) {
-				listeners = 1;
+				listeners = 1;  //< Publish available listener
 				printf("added listener\n");
 			}
 		}
@@ -232,12 +232,15 @@ int process_mrp_msg(char *buf, int buflen)
 			for (j = 0; j < 8; j++) {
 				sscanf(&(buf[i + 2 * j]), "%02x", &id);
 				recovered_streamid[j] = (unsigned char)id;
-			} printf
-			    ("EVENT on STREAM ID=%02x%02x%02x%02x%02x%02x%02x%02x ",
-			     recovered_streamid[0], recovered_streamid[1],
-			     recovered_streamid[2], recovered_streamid[3],
-			     recovered_streamid[4], recovered_streamid[5],
-			     recovered_streamid[6], recovered_streamid[7]);
+			}
+			printf(
+				"EVENT on STREAM ID=%02x%02x%02x%02x%02x%02x%02x%02x ",
+				recovered_streamid[0], recovered_streamid[1],
+				recovered_streamid[2], recovered_streamid[3],
+ 				recovered_streamid[4], recovered_streamid[5],
+ 				recovered_streamid[6], recovered_streamid[7]
+			);
+ 
 			switch (substate) {
 			case 0:
 				printf("with state ignore\n");
@@ -290,6 +293,11 @@ int process_mrp_msg(char *buf, int buflen)
 	return 0;
 }
 
+/**
+ * \brief Polls updates from the MRP daemon.
+ * 
+ * \note Should be run within a separate thread.
+ */
 void *mrp_monitor_thread(void *arg)
 {
 	char *msgbuf;

@@ -71,7 +71,7 @@ int pci_connect(device_t *igb_dev)
 
 		printf("attaching to %s\n", devpath);
 		err = igb_attach(devpath, igb_dev);
-		if ( err || igb_attach_tx( igb_dev )) {
+		if (err || igb_attach_tx( igb_dev )) {
 			printf("attach failed! (%s)\n", strerror(errno));
 			continue;
 		}
