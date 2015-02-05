@@ -82,7 +82,7 @@ typedef struct {
 	uint16_t syt;
 } six1883_header;
 
-typedef struct {
+typedef struct __attribute__ ((packed)) {
 	uint8_t label;
 	uint8_t value[3];
 } six1883_sample;
@@ -98,23 +98,21 @@ typedef struct __attribute__ ((packed)) {
 	uint8_t h_protocol[2];
 } eth_header;
 
-typedef struct { 
+typedef struct {
 	int64_t ml_phoffset;
 	int64_t ls_phoffset;
-	int32_t ml_freqoffset;
-	int32_t ls_freqoffset;
-	int64_t local_time;
+	long double ml_freqoffset;
+	long double ls_freqoffset;
+	uint64_t local_time;
 } gPtpTimeData;
 
 typedef enum { false = 0, true = 1 } bool;
 
-int pci_connect(device_t * igb_dev);
+int pci_connect(device_t *igb_dev);
 
-int gptpscaling(gPtpTimeData * td, char *memory_offset_buffer);
-
-void gptpdeinit(int shm_fd, char *memory_offset_buffer);
-
-int gptpinit(int *shm_fd, char **memory_offset_buffer);
+int gptpinit(int *igb_shm_fd, char **igb_mmap);
+int gptpscaling(const char *igb_mmap, gPtpTimeData *td);
+int gptpdeinit(int *igb_shm_fd, char **igb_mmap);
 
 void avb_set_1722_cd_indicator(seventeen22_header *h1722, uint64_t cd_indicator);
 uint64_t avb_get_1722_cd_indicator(seventeen22_header *h1722);

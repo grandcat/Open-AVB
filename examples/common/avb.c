@@ -40,94 +40,108 @@
 
 #include "avb.h"
 
-int pci_connect(device_t * igb_dev)
+int pci_connect(device_t *igb_dev)
 {
-	char devpath[IGB_BIND_NAMESZ];
 	struct pci_access *pacc;
 	struct pci_dev *dev;
 	int err;
+	char devpath[IGB_BIND_NAMESZ];
 
 	memset(igb_dev, 0, sizeof(device_t));
-
 	pacc = pci_alloc();
-
 	pci_init(pacc);
-
 	pci_scan_bus(pacc);
 
 	for (dev = pacc->devices; dev; dev = dev->next) {
 		pci_fill_info(dev,
-				PCI_FILL_IDENT | PCI_FILL_BASES | PCI_FILL_CLASS);
+			PCI_FILL_IDENT | PCI_FILL_BASES | PCI_FILL_CLASS);
 		igb_dev->pci_vendor_id = dev->vendor_id;
 		igb_dev->pci_device_id = dev->device_id;
 		igb_dev->domain = dev->domain;
 		igb_dev->bus = dev->bus;
 		igb_dev->dev = dev->dev;
 		igb_dev->func = dev->func;
+
 		snprintf(devpath, IGB_BIND_NAMESZ, "%04x:%02x:%02x.%d",
-				dev->domain, dev->bus, dev->dev, dev->func);
+			 dev->domain, dev->bus, dev->dev, dev->func);
 		err = igb_probe(igb_dev);
-		if (err)
+		if (err) {
 			continue;
+		}
 
 		printf("attaching to %s\n", devpath);
 		err = igb_attach(devpath, igb_dev);
-		if (err) {
+		if ( err || igb_attach_tx( igb_dev )) {
 			printf("attach failed! (%s)\n", strerror(errno));
 			continue;
 		}
 		goto out;
 	}
-
 	pci_cleanup(pacc);
 	return ENXIO;
+    
+ out:	pci_cleanup(pacc);
+	return 0;
+}
 
-out:	pci_cleanup(pacc);
+int gptpinit(int *igb_shm_fd, char **igb_mmap)
+{
+	if (NULL == igb_shm_fd)
+		return -1;
+
+	*igb_shm_fd = shm_open(SHM_NAME, O_RDWR, 0);
+	if (*igb_shm_fd == -1) {
+		perror("shm_open()");
+		return -1;
+	}
+	*igb_mmap = (char *)mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE,
+				MAP_SHARED, *igb_shm_fd, 0);
+	if (*igb_mmap == (char *)-1) {
+		perror("mmap()");
+		*igb_mmap = NULL;
+		shm_unlink(SHM_NAME);
+		return -1;
+	}
 
 	return 0;
 }
 
-int gptpinit(int *shm_fd, char **memory_offset_buffer)
+int gptpscaling(const char *igb_mmap, gPtpTimeData *td)
 {
-	*shm_fd = shm_open(SHM_NAME, O_RDWR, 0);
-	if (*shm_fd == -1) {
-		perror("shm_open()");
-		return false;
-	}
-	*memory_offset_buffer =
-	    (char *)mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
-			 *shm_fd, 0);
-	if (*memory_offset_buffer == (char *)-1) {
-		perror("mmap()");
-		*memory_offset_buffer = NULL;
-		shm_unlink(SHM_NAME);
-		return false;
-	}
-	return true;
-}
+	if (NULL == td)
+		return -1;
 
-void gptpdeinit(int shm_fd, char *memory_offset_buffer)
-{
-	if (memory_offset_buffer != NULL) {
-		munmap(memory_offset_buffer, SHM_SIZE);
+	(void) pthread_mutex_lock((pthread_mutex_t *) igb_mmap);
+	{
+		memcpy(td, igb_mmap + sizeof(pthread_mutex_t), sizeof(*td));
 	}
-	if (shm_fd != -1) {
-		close(shm_fd);
-	}
-}
+	(void) pthread_mutex_unlock((pthread_mutex_t *) igb_mmap);
 
-int gptpscaling(gPtpTimeData * td, char *memory_offset_buffer)
-{
-	pthread_mutex_lock((pthread_mutex_t *) memory_offset_buffer);
-	memcpy(td, memory_offset_buffer + sizeof(pthread_mutex_t), sizeof(*td));
-	pthread_mutex_unlock((pthread_mutex_t *) memory_offset_buffer);
-
-	fprintf(stderr, "ml_phoffset = %lld, ls_phoffset = %lld\n",
-		td->ml_phoffset, td->ls_phoffset);
-	fprintf(stderr, "ml_freqffset = %d, ls_freqoffset = %d\n",
+	fprintf(stderr, "local_time = %" PRIu64 "\n",
+			td->local_time);
+	fprintf(stderr, "ml_phoffset = %" PRId64 ", ls_phoffset = %" PRId64 "\n",
+			td->ml_phoffset, td->ls_phoffset);
+	fprintf(stderr, "ml_freqffset = %Lf, ls_freqoffset = %Lf\n",
 		td->ml_freqoffset, td->ls_freqoffset);
 
-	return true;
+	return 0;
+}
+
+int gptpdeinit(int *igb_shm_fd, char **igb_mmap)
+{
+	if (NULL == igb_shm_fd)
+		return -1;
+
+	if (igb_mmap != NULL) {
+		munmap(*igb_mmap, SHM_SIZE);
+		*igb_mmap = NULL;
+	}
+	if (*igb_shm_fd != -1) {
+		close(*igb_shm_fd);
+		*igb_shm_fd = -1;
+	}
+
+	return 0;
 }
 
 /* setters & getters for seventeen22_header */
