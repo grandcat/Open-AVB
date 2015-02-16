@@ -539,22 +539,20 @@ void avb_1722_set_eth_type(eth_header *eth_header) {
 
 	eth_header->h_protocol[0] = 0x22;
 	eth_header->h_protocol[1] = 0xf0;
-
-	return;
 }
 
 int32_t
-avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *addr, int8_t *iface)
+avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *dst_addr, int8_t *iface)
 {
 	uint8_t source_mac[ETH_ALEN];
 
-	if (!addr || !iface)
+	if (!dst_addr || !iface)
 		return -EINVAL;
 
 	if (avb_get_iface_mac_address(iface, source_mac))
 		return -EINVAL;
 
-	memcpy(ethernet_header->h_dest, addr, ETH_ALEN);
+	memcpy(ethernet_header->h_dest, dst_addr, ETH_ALEN);
 	memcpy(ethernet_header->h_source, source_mac, ETH_ALEN);
 
 	return 0;

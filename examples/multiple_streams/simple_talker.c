@@ -73,6 +73,8 @@
 #define L4_PORT ((uint16_t)5004)
 #define PKT_SZ (100)
 
+#define TX_QUEUE (1)                        //< tx-queue-0/1 for Class A / B traffic
+
 /******************************************************************************/
 /***   Type definitions                                                     ***/
 /******************************************************************************/
@@ -303,6 +305,16 @@ int get_mac_address
     return 0;
 }
 
+void
+avb_hdr1722_set_streamID
+(
+    seventeen22_header *h1722,
+    unsigned char streamID[]
+)
+{
+    memcpy(&(h1722->stream_id), streamID, sizeof(glob_station_addr));
+}
+
 static void usage(void)
 {
     fprintf(stderr, "\n"
@@ -470,7 +482,17 @@ int main
 
     rc = mrp_register_domain(&domain_class_a_id, &domain_class_a_priority, &domain_class_a_vid);
     if (rc) {
-        printf("mrp_register_domain failed\n");
+        printf("mrp_register_domain for class A failed\n");
+        return EXIT_FAILURE;
+    }
+    
+    domain_class_b_id = MSRP_SR_CLASS_B;
+    domain_class_b_priority = MSRP_SR_CLASS_B_PRIO;
+    domain_class_b_vid = 3;
+
+    rc = mrp_register_domain(&domain_class_b_id, &domain_class_b_priority, &domain_class_b_vid);
+    if (rc) {
+        printf("mrp_register_domain for class B failed\n");
         return EXIT_FAILURE;
     }
 
@@ -481,15 +503,22 @@ int main
     }
 
     if(transport == 2) {
-        igb_set_class_bandwidth
-            (&igb_dev, 125000/L2_PACKET_IPG, 0, PKT_SZ - 22, 0);
+        // Reservations for parallel class A and class B streams
+        rc = igb_set_class_bandwidth
+                (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG, 
+                 PKT_SZ - 22, PKT_SZ - 22);
     } else {
-        igb_set_class_bandwidth
+        rc = igb_set_class_bandwidth
             (&igb_dev, 1, 0,
              sizeof(*l4_headers)+L4_SAMPLES_PER_FRAME*CHANNELS*2, 0);
     }
 
-    // Note: glob_stream_id newly set to mac address
+    if (rc) {
+        printf("igb_set_class_bandwidth failed\n");
+        return EXIT_FAILURE;
+    }
+
+    // Note: glob_stream_id set to iface MAC address
     memset(glob_stream_id, 0, sizeof(glob_stream_id));  // stream id: 0
     memcpy(glob_stream_id, glob_station_addr, sizeof(glob_station_addr));
 
@@ -537,44 +566,32 @@ int main
         if( transport == 2 ) {
             ((char *)tmp_packet->vaddr)[16] = 0x22;	/* 1722 eth type */
             ((char *)tmp_packet->vaddr)[17] = 0xF0;
+            // avb_1722_set_eth_type((eth_header *)tmp_packet->vaddr);
+            
         } else {
             ((char *)tmp_packet->vaddr)[16] = 0x08;	/* IP eth type */
             ((char *)tmp_packet->vaddr)[17] = 0x00;
         }
 
         if( transport == 2 ) {
-            /* 1722 header update + payload */
-            l2_header0 =
-                (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
-            l2_header0->cd_indicator = 0;
-            l2_header0->subtype = 0;
-            l2_header0->sid_valid = 1;
-            l2_header0->version = 0;
-            l2_header0->reset = 0;
-            l2_header0->reserved0 = 0;
-            l2_header0->gateway_valid = 0;
-            l2_header0->reserved1 = 0;
-            l2_header0->timestamp_uncertain = 0;
-            memset(&(l2_header0->stream_id), 0, sizeof(l2_header0->stream_id));
-            memcpy(&(l2_header0->stream_id), glob_station_addr,
-                   sizeof(glob_station_addr));
-            l2_header0->length = htons(32);
+            // Initialize 1722 header + payload
+            l2_header0 = (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
+            avb_initialize_h1722_to_defaults(l2_header0);
+            avb_set_1722_sid_valid(l2_header0, 0x1);
+            avb_hdr1722_set_streamID(l2_header0, glob_station_addr); // TODO: replace with avb.h call
+            
+            // Initialize 61883 header
             l2_header1 = (six1883_header *) (l2_header0 + 1);
-            l2_header1->format_tag = 1;
-            l2_header1->packet_channel = 0x1F;
-            l2_header1->packet_tcode = 0xA;
-            l2_header1->app_control = 0x0;
-            l2_header1->reserved0 = 0;
-            l2_header1->source_id = 0x3F;
-            l2_header1->data_block_size = 1;
-            l2_header1->fraction_number = 0;
-            l2_header1->quadlet_padding_count = 0;
-            l2_header1->source_packet_header = 0;
-            l2_header1->reserved1 = 0;
-            l2_header1->eoh = 0x2;
-            l2_header1->format_id = 0x10;
-            l2_header1->format_dependent_field = 0x02;
-            l2_header1->syt = 0xFFFF;
+            avb_initialize_61883_to_defaults(l2_header1);
+            avb_set_61883_format_tag(l2_header1, 0x1);
+            avb_set_61883_packet_channel(l2_header1, 0x1F);
+            avb_set_61883_packet_tcode(l2_header1, 0xA);
+            avb_set_61883_source_id(l2_header1 , 0x3F);
+            avb_set_61883_data_block_size(l2_header1, 0x1);
+            avb_set_61883_eoh(l2_header1, 0x2);
+            avb_set_61883_format_id(l2_header1, 0x10);
+            avb_set_61883_format_dependent_field(l2_header1, 0x02);
+            avb_set_61883_syt(l2_header1, 0xFFFF);
             tmp_packet->len =
                 18 + sizeof(seventeen22_header) + sizeof(six1883_header) +
                 (L2_SAMPLES_PER_FRAME * CHANNELS * sizeof(six1883_sample));
@@ -645,26 +662,26 @@ int main
         sleep(1);
         printf("Global stream id: %x%x %x%x\n",
                (uint) glob_stream_id[0], (uint) glob_stream_id[5],
-                (uint) glob_stream_id[6], (uint) glob_stream_id[7]);
+               (uint) glob_stream_id[6], (uint) glob_stream_id[7]);
 
         {
+            // Creating a second stream
             uint8_t dest_addr_s2[8];
 
-            // Set global stream id with +1 for second stream
+            // Set global stream id for second stream
             memcpy(glob_stream_id2, glob_station_addr, sizeof(glob_station_addr));
-            glob_stream_id2[5] = 0xf9;
             printf("Global stream id: %x%x %x%x\n",
                    (uint) glob_stream_id2[0], (uint) glob_stream_id2[5],
-                    (uint) glob_stream_id2[6], (uint) glob_stream_id2[7]);
+                   (uint) glob_stream_id2[6], (uint) glob_stream_id2[7]);
 
             // New destination id +1 to define new communication domain
             memset(dest_addr_s2, 0, sizeof(dest_addr_s2));
             memcpy(dest_addr_s2, glob_l2_dest_addr, sizeof(dest_addr_s2));
             dest_addr_s2[5] = 0x81;
             rc += mrp_advertise_stream(glob_stream_id2, dest_addr_s2,
-                        domain_class_a_vid + 1, PKT_SZ - 16,
-                        L2_PACKET_IPG / (125000 / 2), // 2 packets every 250 usec
-                        MSRP_SR_CLASS_A_PRIO, 3900);
+                        domain_class_b_vid, PKT_SZ - 16,
+                        L2_PACKET_IPG / (125000 / 2), // 1 packets every 2 * 250 usec
+                        MSRP_SR_CLASS_B_PRIO, 3900);
         }
         
     } else {
@@ -811,7 +828,7 @@ int main
             }
         }
 
-        err = igb_xmit(&igb_dev, 0, tmp_packet);
+        err = igb_xmit(&igb_dev, TX_QUEUE, tmp_packet);
 
         if (!err) {
             continue;

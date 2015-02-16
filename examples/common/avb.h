@@ -195,7 +195,7 @@ void avb_initialize_61883_to_defaults(six1883_header *h61883);
 int32_t avb_get_iface_mac_address(int8_t *iface, uint8_t *addr);
 
 int32_t
-avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *addr, int8_t *iface);
+avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *dst_addr, int8_t *iface);
 
 void avb_1722_set_eth_type(eth_header *eth_header);
 
