@@ -73,7 +73,7 @@
 #define L4_PORT ((uint16_t)5004)
 #define PKT_SZ (100)
 
-#define TX_QUEUE (1)                        //< tx-queue-0/1 for Class A / B traffic
+#define TX_QUEUE (0)                        //< tx-queue-0/1 for Class A / B traffic
 
 /******************************************************************************/
 /***   Type definitions                                                     ***/
@@ -340,6 +340,7 @@ int main
     int igb_shm_fd = -1;
     char *igb_mmap = NULL;
     struct igb_dma_alloc a_page;
+    struct igb_dma_alloc b_page;
     struct igb_packet a_packet;
     struct igb_packet *tmp_packet;
     struct igb_packet *cleaned_packets;
@@ -355,6 +356,12 @@ int main
     unsigned total_samples = 0;
     gPtpTimeData td;
     int32_t sample_buffer[L4_SAMPLES_PER_FRAME * SRC_CHANNELS];
+
+    // Construction of default packet
+    void *default_tx_packet;
+    seventeen22_header *hdr1722;
+    six1883_header *hdr61883;
+    int frame_size;
 
     seventeen22_header *l2_header0;
     six1883_header *l2_header1;
@@ -420,6 +427,8 @@ int main
         return errno;
     }
     err = igb_dma_malloc_page(&igb_dev, &a_page);
+    err += igb_dma_malloc_page(&igb_dev, &b_page);
+    // printf("DMA page A:%" PRIu64 ", B:%" PRIu64 "\n", a_page.dma_paddr, b_page.dma_paddr);
     if (err) {
         printf("malloc failed (%s) - out of memory?\n",
                strerror(errno));
@@ -529,6 +538,47 @@ int main
                 (L4_SAMPLES_PER_FRAME * CHANNELS * L4_SAMPLE_SIZE );
     }
 
+    //
+    // Prepare basic structure for all packets
+    //
+    frame_size = sizeof(eth_header) + 4
+               + sizeof(seventeen22_header) + sizeof(six1883_header);
+    default_tx_packet = avb_create_packet(4); // sizeof(Q-Tag header) = 4
+
+    hdr1722 = (seventeen22_header *)((char *)default_tx_packet + 0);
+    hdr61883 = (six1883_header *) (hdr1722 + 1);
+    
+    // Set minimal MAC header
+    //avb_eth_header_set_mac(default_tx_packet, dest_addr, (int8_t *)interface);
+    memcpy(default_tx_packet, dest_addr, sizeof(dest_addr));
+    memcpy(default_tx_packet + 6, glob_station_addr, sizeof(glob_station_addr));
+
+    // AVB Q-Tag header
+    ((char *)default_tx_packet)[12] = 0x81;
+    ((char *)default_tx_packet)[13] = 0x00;
+    ((char *)default_tx_packet)[14] =
+            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
+    ((char *)default_tx_packet)[15] =
+            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
+    ((char *)default_tx_packet)[16] = 0x22;	/* 1722 eth type */
+    ((char *)default_tx_packet)[17] = 0xF0;
+
+    // Set default 1722 header
+    avb_initialize_h1722_to_defaults(hdr1722);
+    avb_set_1722_sid_valid(hdr1722, 0x1);
+    avb_hdr1722_set_streamID(hdr1722, glob_station_addr);
+    // Set default 61883 header
+    avb_initialize_61883_to_defaults(hdr61883);
+    avb_set_61883_format_tag(hdr61883, 0x1);
+    avb_set_61883_packet_channel(hdr61883, 0x1F);
+    avb_set_61883_packet_tcode(hdr61883, 0xA);
+    avb_set_61883_source_id(hdr61883 , 0x3F);
+    avb_set_61883_data_block_size(hdr61883, 0x1);
+    avb_set_61883_eoh(hdr61883, 0x2);
+    avb_set_61883_format_id(hdr61883, 0x10);
+    avb_set_61883_format_dependent_field(hdr61883, 0x02);
+    avb_set_61883_syt(hdr61883, 0xFFFF);
+
     a_packet.dmatime = a_packet.attime = a_packet.flags = 0;
     a_packet.map.paddr = a_page.dma_paddr;
     a_packet.map.mmap_size = a_page.mmap_size;
@@ -551,49 +601,51 @@ int main
         tmp_packet->offset = (i * packet_size);
         tmp_packet->vaddr += tmp_packet->offset;
         tmp_packet->next = free_packets;
-        memset(tmp_packet->vaddr, 0, packet_size);	/* MAC header at least */
-        memcpy(tmp_packet->vaddr, dest_addr, sizeof(dest_addr));
-        memcpy(tmp_packet->vaddr + 6, glob_station_addr,
-               sizeof(glob_station_addr));
 
-        /* Q-tag */
-        ((char *)tmp_packet->vaddr)[12] = 0x81;
-        ((char *)tmp_packet->vaddr)[13] = 0x00;
-        ((char *)tmp_packet->vaddr)[14] =
-            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
-        ((char *)tmp_packet->vaddr)[15] =
-            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
-        if( transport == 2 ) {
-            ((char *)tmp_packet->vaddr)[16] = 0x22;	/* 1722 eth type */
-            ((char *)tmp_packet->vaddr)[17] = 0xF0;
-            // avb_1722_set_eth_type((eth_header *)tmp_packet->vaddr);
-            
-        } else {
-            ((char *)tmp_packet->vaddr)[16] = 0x08;	/* IP eth type */
-            ((char *)tmp_packet->vaddr)[17] = 0x00;
-        }
+        memcpy(((char *)tmp_packet->vaddr), default_tx_packet, frame_size);
+
+//        memset(tmp_packet->vaddr, 0, packet_size);	/* MAC header at least */
+//        memcpy(tmp_packet->vaddr, dest_addr, sizeof(dest_addr));
+//        memcpy(tmp_packet->vaddr + 6, glob_station_addr,
+//               sizeof(glob_station_addr));
+
+//        /* Q-tag */
+//        ((char *)tmp_packet->vaddr)[12] = 0x81;
+//        ((char *)tmp_packet->vaddr)[13] = 0x00;
+//        ((char *)tmp_packet->vaddr)[14] =
+//            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
+//        ((char *)tmp_packet->vaddr)[15] =
+//            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
+//        if( transport == 2 ) {
+//            ((char *)tmp_packet->vaddr)[16] = 0x22;	/* 1722 eth type */
+//            ((char *)tmp_packet->vaddr)[17] = 0xF0;
+//        } else {
+//            ((char *)tmp_packet->vaddr)[16] = 0x08;	/* IP eth type */
+//            ((char *)tmp_packet->vaddr)[17] = 0x00;
+//        }
 
         if( transport == 2 ) {
-            // Initialize 1722 header + payload
-            l2_header0 = (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
-            avb_initialize_h1722_to_defaults(l2_header0);
-            avb_set_1722_sid_valid(l2_header0, 0x1);
-            avb_hdr1722_set_streamID(l2_header0, glob_station_addr); // TODO: replace with avb.h call
+//            // Initialize 1722 header + payload
+//            l2_header0 = (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
+//            avb_initialize_h1722_to_defaults(l2_header0);
+//            avb_set_1722_sid_valid(l2_header0, 0x1);
+//            avb_hdr1722_set_streamID(l2_header0, glob_station_addr); // TODO: replace with avb.h call
             
-            // Initialize 61883 header
-            l2_header1 = (six1883_header *) (l2_header0 + 1);
-            avb_initialize_61883_to_defaults(l2_header1);
-            avb_set_61883_format_tag(l2_header1, 0x1);
-            avb_set_61883_packet_channel(l2_header1, 0x1F);
-            avb_set_61883_packet_tcode(l2_header1, 0xA);
-            avb_set_61883_source_id(l2_header1 , 0x3F);
-            avb_set_61883_data_block_size(l2_header1, 0x1);
-            avb_set_61883_eoh(l2_header1, 0x2);
-            avb_set_61883_format_id(l2_header1, 0x10);
-            avb_set_61883_format_dependent_field(l2_header1, 0x02);
-            avb_set_61883_syt(l2_header1, 0xFFFF);
+//            // Initialize 61883 header
+//            l2_header1 = (six1883_header *) (l2_header0 + 1);
+//            avb_initialize_61883_to_defaults(l2_header1);
+//            avb_set_61883_format_tag(l2_header1, 0x1);
+//            avb_set_61883_packet_channel(l2_header1, 0x1F);
+//            avb_set_61883_packet_tcode(l2_header1, 0xA);
+//            avb_set_61883_source_id(l2_header1 , 0x3F);
+//            avb_set_61883_data_block_size(l2_header1, 0x1);
+//            avb_set_61883_eoh(l2_header1, 0x2);
+//            avb_set_61883_format_id(l2_header1, 0x10);
+//            avb_set_61883_format_dependent_field(l2_header1, 0x02);
+//            avb_set_61883_syt(l2_header1, 0xFFFF);
+
             tmp_packet->len =
-                18 + sizeof(seventeen22_header) + sizeof(six1883_header) +
+                frame_size +
                 (L2_SAMPLES_PER_FRAME * CHANNELS * sizeof(six1883_sample));
         } else {
             pseudo_hdr.source = l4_local_address;
@@ -646,6 +698,7 @@ int main
         }
         free_packets = tmp_packet;
     }
+    free(default_tx_packet);
 
     /*
      * subtract 16 bytes for the MAC header/Q-tag - pktsz is limited to the
@@ -829,6 +882,7 @@ int main
         }
 
         err = igb_xmit(&igb_dev, TX_QUEUE, tmp_packet);
+        // err += igb_xmit(&igb_dev, TX_QUEUE+1, tmp_packet);
 
         if (!err) {
             continue;
@@ -878,6 +932,7 @@ int main
         printf("mrp_disconnect failed\n");
 
     igb_dma_free_page(&igb_dev, &a_page);
+    igb_dma_free_page(&igb_dev, &b_page);
     rc = gptpdeinit(&igb_shm_fd, &igb_mmap);
     err = igb_detach(&igb_dev);
 

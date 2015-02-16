@@ -1,3 +1,4 @@
+*.o
 build/
 daemons/gptp/linux/build/obj/*.o
 daemons/gptp/linux/build/obj/daemon_cl
