@@ -68,3 +68,29 @@ Command:
 ```
 S-L:
 ```
+
+# General notes
+
+### IGB: transmit, receive queues and class priority
+
+Class-dependent send interval:
+* 125 usec for class A
+* 250 usec for class B
+
+The transmit queues are assigned as follows:
+* tx-queue-0 for AVB Class A
+* tx-queue-1 for AVB Class B
+* tx-queue-2/3 are reserved for normal traffic
+
+Incoming traffic is hardcoded to rx-queue-0. The reason is that the receiving side
+for AVB traffic gathers the packets by the standard Linux sockets.
+
+See: https://github.com/AVnu/Open-AVB/pull/3#issuecomment-18956741
+
+Qav shaper is enabled by default when using igb_xmit(). It is set when igb_set_class_bandwidth() is called.
+
+### Advertising multiple streams
+
+* Unique stream ID
+* Unique destination address
+* mrp_register_domain has to be called separately for class A and class B
