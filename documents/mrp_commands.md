@@ -21,7 +21,7 @@ S++:S=1122334455660123, (Stream ID, 8 bytes)
 ```
 * Stream ID has to be unique. It corresponds to the hexadecimal format without
   the leading "0x".
-* The Destination Mac has to be unique per advertised stream. Otherwise, the AVB
+* The destination MAC has to be unique per advertised stream. Otherwise, an AVB
   switch will discard it.
 * Priority and rank:
   * Bit field: `3 bits priority | 1 bit rank | 4 bits reserved`
