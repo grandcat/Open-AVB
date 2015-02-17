@@ -545,9 +545,9 @@ int main
                + sizeof(seventeen22_header) + sizeof(six1883_header);
     default_tx_packet = avb_create_packet(4); // sizeof(Q-Tag header) = 4
 
-    hdr1722 = (seventeen22_header *)((char *)default_tx_packet + 0);
+    hdr1722 = (seventeen22_header *)((char *)default_tx_packet + sizeof(eth_header) + 4);
     hdr61883 = (six1883_header *) (hdr1722 + 1);
-    
+
     // Set minimal MAC header
     //avb_eth_header_set_mac(default_tx_packet, dest_addr, (int8_t *)interface);
     memcpy(default_tx_packet, dest_addr, sizeof(dest_addr));
