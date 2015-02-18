@@ -82,6 +82,7 @@
 typedef struct streamDesc_s {
     uint8_t stream_ID[8];
     uint8_t l2_dest_addr[6];
+
 } streamDesc_t;
 
 typedef struct __attribute__ ((packed)) {

@@ -272,10 +272,8 @@ int process_mrp_msg(char *buf, int buflen)
 			case 'N':
 				printf("got a new/join indication\n");
 				if (substate > MSRP_LISTENER_ASKFAILED) {
-					if (memcmp
-					    (recovered_streamid,
-					     monitor_stream_id,
-					     sizeof(recovered_streamid)) == 0)
+					if (memcmp(recovered_streamid, monitor_stream_id,
+						sizeof(recovered_streamid)) == 0)
 						listeners = 1;
 				}
 				break;
