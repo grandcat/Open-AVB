@@ -541,6 +541,11 @@ void avb_1722_set_eth_type(eth_header *eth_header) {
 	eth_header->h_protocol[1] = 0xf0;
 }
 
+void avb_eth_header_set_dest_mac(eth_header *ethernet_header, uint8_t *dst_addr)
+{
+    memcpy(ethernet_header->h_dest, dst_addr, ETH_ALEN);
+}
+
 int32_t
 avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *dst_addr, int8_t *iface)
 {

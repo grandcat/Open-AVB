@@ -34,6 +34,7 @@
 /******************************************************************************/
 /***   Includes                                                             ***/
 /******************************************************************************/
+#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <fcntl.h>
@@ -45,7 +46,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
-#include <linux/if.h>   // Mac address handling
+#include <linux/if.h>   // MAC address handling
 
 #include "avb.h"
 #include "igb.h"
@@ -78,6 +79,11 @@
 /******************************************************************************/
 /***   Type definitions                                                     ***/
 /******************************************************************************/
+typedef struct streamDesc_s {
+    uint8_t stream_ID[8];
+    uint8_t l2_dest_addr[6];
+} streamDesc_t;
+
 typedef struct __attribute__ ((packed)) {
     uint8_t version_length;
     uint8_t DSCP_ECN;
@@ -121,7 +127,10 @@ typedef struct __attribute__ ((packed)) {
 /******************************************************************************/
 static const char *version_str = "simple_talker v" VERSION_STR "\n";
 
-unsigned char glob_station_addr[] = { 0, 0, 0, 0, 0, 0 };       //< overwritten by get_mac_address()
+uint num_streams;
+streamDesc_t* streamState;
+
+uint8_t glob_station_addr[] = { 0, 0, 0, 0, 0, 0 };       //< overwritten by get_mac_address()
 unsigned char glob_stream_id[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 unsigned char glob_stream_id2[] = { 0, 0, 0, 0, 0, 0, 0, 1 };
 /* IEEE 1722 reserved address */
@@ -309,10 +318,158 @@ void
 avb_hdr1722_set_streamID
 (
     seventeen22_header *h1722,
-    unsigned char streamID[]
+    unsigned char baseStreamID[]
 )
 {
-    memcpy(&(h1722->stream_id), streamID, sizeof(glob_station_addr));
+    memcpy(&(h1722->stream_id), baseStreamID, ETH_ALEN);
+}
+
+static void
+initialize_default_streams
+(
+    streamDesc_t **streams,
+    int number_of_streams
+)
+{
+    int i;
+
+    assert(0 < number_of_streams && number_of_streams < 256);
+    *streams = (streamDesc_t *)calloc(sizeof(streamDesc_t), number_of_streams);
+    assert(0 != *streams);
+
+    for (i = 0; i < number_of_streams; ++i)
+    {
+        streamDesc_t *curStream = &((*streams)[i]);
+
+        // Stream ID: source MAC || identifier
+        memcpy(&(curStream->stream_ID), glob_station_addr, ETH_ALEN);
+        curStream->stream_ID[7] = i;
+        // Destination MAC: base multicast address + last byte identifer
+        memcpy(&(curStream->l2_dest_addr), glob_l2_dest_addr, ETH_ALEN);
+        curStream->l2_dest_addr[5] += i;
+    }
+
+    for (i = 0; i < number_of_streams; ++i)
+    {
+        streamDesc_t *curStream = &((*streams)[i]);
+        printf("Stream %i: %x %x\n", i, curStream->stream_ID[4], curStream->stream_ID[7]);
+        printf("Dest %i: %x %x\n", i, curStream->l2_dest_addr[4], curStream->l2_dest_addr[5]);
+    }
+}
+
+static int
+advertise_streams
+(
+    streamDesc_t* streams,
+    bool unadvertise
+)
+{
+    unsigned int i;
+    int rc;
+
+    fprintf(stderr, (!unadvertise) ? "MRPD: advertising streams:\n" :
+                                     "MRPD: unadvertising streams:\n");
+    for (i = 0; i < num_streams; ++i)
+    {
+        streamDesc_t* curStream = &(streams[i]);
+
+        if (!unadvertise)
+        {
+            rc = mrp_advertise_stream((curStream->stream_ID), (curStream->l2_dest_addr),
+                                      domain_class_a_vid, PKT_SZ - 16,
+                                      L2_PACKET_IPG / 125000 * num_streams,
+                                      MSRP_SR_CLASS_A_PRIO, 3900);
+        }
+        else
+        {
+            rc = mrp_unadvertise_stream((curStream->stream_ID), (curStream->l2_dest_addr),
+                                   domain_class_a_vid, PKT_SZ - 16,
+                                   L2_PACKET_IPG / 125000 * num_streams,
+                                   MSRP_SR_CLASS_A_PRIO, 3900);
+        }
+
+        if (rc) {
+            printf("mrp_advertise_stream failed for stream %i\n", i);
+            return EXIT_FAILURE;
+        }
+
+        printf("  Stream ID: %x %x %x\n",
+               curStream->stream_ID[5], curStream->stream_ID[6], curStream->stream_ID[7]);
+
+        // MRPD has problems with too fast advertisements
+        //sleep(1);
+    }
+
+    return 0;
+}
+
+static void
+deinitialize_streams
+(
+    streamDesc_t **streams
+)
+{
+    assert(0 != *streams);
+    free(*streams);
+}
+
+static void
+avb_prepare_packet_structure
+(
+    void *tx_packet,
+    uint8_t l2_dest_addr[],
+    uint8_t l2_src_addr[]
+)
+{
+    seventeen22_header *hdr1722;
+    six1883_header *hdr61883;
+
+    hdr1722 = (seventeen22_header *)((char *)tx_packet + sizeof(eth_header) + 4);
+    hdr61883 = (six1883_header *) (hdr1722 + 1);
+
+    // Set minimal MAC header
+    //avb_eth_header_set_mac(default_tx_packet, dest_addr, (int8_t *)interface);
+    avb_eth_header_set_dest_mac(tx_packet, l2_dest_addr);
+    memcpy(tx_packet + ETH_ALEN, l2_src_addr, ETH_ALEN);
+
+    // AVB Q-Tag header (TODO: remove global access to these variables)
+    ((char *)tx_packet)[12] = 0x81;
+    ((char *)tx_packet)[13] = 0x00;
+    ((char *)tx_packet)[14] =
+            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
+    ((char *)tx_packet)[15] =
+            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
+    ((char *)tx_packet)[16] = 0x22;	/* 1722 eth type */
+    ((char *)tx_packet)[17] = 0xF0;
+
+    // Set default 1722 header
+    avb_initialize_h1722_to_defaults(hdr1722);
+    avb_set_1722_sid_valid(hdr1722, 0x1);
+    avb_hdr1722_set_streamID(hdr1722, (unsigned char *)l2_src_addr); // TODO: check whether dynamic change is needed here
+    avb_set_1722_length(hdr1722, htons(32));
+
+    // Set default 61883 header (for audio)
+    avb_initialize_61883_to_defaults(hdr61883);
+    avb_set_61883_format_tag(hdr61883, 0x1);
+    avb_set_61883_packet_channel(hdr61883, 0x1F);
+    avb_set_61883_packet_tcode(hdr61883, 0xA);
+    avb_set_61883_source_id(hdr61883 , 0x3F);
+    avb_set_61883_data_block_size(hdr61883, 0x1);
+    avb_set_61883_eoh(hdr61883, 0x2);
+    avb_set_61883_format_id(hdr61883, 0x10);
+    avb_set_61883_format_dependent_field(hdr61883, 0x02);
+    avb_set_61883_syt(hdr61883, 0xFFFF);
+}
+
+static void*
+thread_tx_packets
+(
+    void *arg
+) 
+{
+    (void) arg; /* unused */
+
+    return NULL;
 }
 
 static void usage(void)
@@ -323,7 +480,7 @@ static void usage(void)
         "options:\n"
         "    -h  show this message\n"
         "    -i  specify interface for AVB connection\n"
-        "    -t  transport equal to 2 for 1722 or 3 for RTP\n"
+        "    -n  number of parallel streams\n"
         "\n" "%s" "\n", version_str);
     exit(EXIT_FAILURE);
 }
@@ -345,13 +502,17 @@ int main
     struct igb_packet *tmp_packet;
     struct igb_packet *cleaned_packets;
     struct igb_packet *free_packets;
+    int current_listener_id;
     int c;
     u_int64_t last_time;
     int rc = 0;
     char *interface = NULL;
-    int transport = -1;
+    int transport = 2;
+
+    num_streams = -1;
+
     uint16_t seqnum;
-    uint32_t rtp_timestamp;
+    // uint32_t rtp_timestamp;
     uint64_t time_stamp;
     unsigned total_samples = 0;
     gPtpTimeData td;
@@ -359,16 +520,15 @@ int main
 
     // Construction of default packet
     void *default_tx_packet;
-    seventeen22_header *hdr1722;
-    six1883_header *hdr61883;
     int frame_size;
 
     seventeen22_header *l2_header0;
     six1883_header *l2_header1;
     six1883_sample *sample;
 
+    // Old RTP audio
     IP_RTP_Header *l4_headers;
-    IP_PseudoHeader pseudo_hdr;
+    // IP_PseudoHeader pseudo_hdr;
     unsigned l4_local_address = 0;
     int sd;
     struct sockaddr_in local;
@@ -381,7 +541,7 @@ int main
     size_t packet_size;
 
     for (;;) {
-        c = getopt(argc, argv, "hi:t:");
+        c = getopt(argc, argv, "hi:n:");
         if (c < 0)
             break;
         switch (c) {
@@ -396,8 +556,8 @@ int main
             }
             interface = strdup(optarg);
             break;
-        case 't':
-            transport = strtoul(optarg, NULL, 10);
+        case 'n':
+            num_streams = strtoul(optarg, NULL, 10);
         }
     }
     if (optind < argc)
@@ -405,8 +565,8 @@ int main
     if (NULL == interface) {
         usage();
     }
-    if(transport < 2 || transport > 4) {
-        fprintf( stderr, "Must specify valid transport\n" );
+    if(num_streams < 1 || num_streams > 256) {
+        fprintf( stderr, "Must specify valid number of streams (range 1 - 256).\n" );
         usage();
     }
     rc = mrp_connect();
@@ -435,6 +595,7 @@ int main
         return errno;
     }
     signal(SIGINT, sigint_handler);
+    // Set global station address
     rc = get_mac_address(interface);
     if (rc) {
         printf("failed to open interface\n");
@@ -494,40 +655,36 @@ int main
         printf("mrp_register_domain for class A failed\n");
         return EXIT_FAILURE;
     }
-    
-    domain_class_b_id = MSRP_SR_CLASS_B;
-    domain_class_b_priority = MSRP_SR_CLASS_B_PRIO;
-    domain_class_b_vid = 3;
 
-    rc = mrp_register_domain(&domain_class_b_id, &domain_class_b_priority, &domain_class_b_vid);
-    if (rc) {
-        printf("mrp_register_domain for class B failed\n");
-        return EXIT_FAILURE;
-    }
+    // Care only about class A traffic right now
+//    domain_class_b_id = MSRP_SR_CLASS_B;
+//    domain_class_b_priority = MSRP_SR_CLASS_B_PRIO;
+//    domain_class_b_vid = 3;
+//    rc = mrp_register_domain(&domain_class_b_id, &domain_class_b_priority, &domain_class_b_vid);
+//    if (rc) {
+//        printf("mrp_register_domain for class B failed\n");
+//        return EXIT_FAILURE;
+//    }
 
+    // MRP: listern to messages of vlan 2 (Class A)
     rc = mrp_join_vlan();
     if (rc) {
         printf("mrp_join_vlan failed\n");
         return EXIT_FAILURE;
     }
 
-    if(transport == 2) {
-        // Reservations for parallel class A and class B streams
-        rc = igb_set_class_bandwidth
-                (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG, 
-                 PKT_SZ - 22, PKT_SZ - 22);
-    } else {
-        rc = igb_set_class_bandwidth
-            (&igb_dev, 1, 0,
-             sizeof(*l4_headers)+L4_SAMPLES_PER_FRAME*CHANNELS*2, 0);
-    }
-
+    // Reservations for parallel class A and class B streams
+    rc = igb_set_class_bandwidth
+            (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG,
+             PKT_SZ - 22, PKT_SZ - 22);
     if (rc) {
         printf("igb_set_class_bandwidth failed\n");
         return EXIT_FAILURE;
     }
 
-    // Note: glob_stream_id set to iface MAC address
+    initialize_default_streams(&streamState, num_streams);
+
+    // Note: glob_stream_id set to iface MAC address (base address)
     memset(glob_stream_id, 0, sizeof(glob_stream_id));  // stream id: 0
     memcpy(glob_stream_id, glob_station_addr, sizeof(glob_station_addr));
 
@@ -538,47 +695,14 @@ int main
                 (L4_SAMPLES_PER_FRAME * CHANNELS * L4_SAMPLE_SIZE );
     }
 
-    //
     // Prepare basic structure for all packets
-    //
     frame_size = sizeof(eth_header) + 4
                + sizeof(seventeen22_header) + sizeof(six1883_header);
+
     default_tx_packet = avb_create_packet(4); // sizeof(Q-Tag header) = 4
+    avb_prepare_packet_structure(default_tx_packet, dest_addr, glob_station_addr);
 
-    hdr1722 = (seventeen22_header *)((char *)default_tx_packet + sizeof(eth_header) + 4);
-    hdr61883 = (six1883_header *) (hdr1722 + 1);
-
-    // Set minimal MAC header
-    //avb_eth_header_set_mac(default_tx_packet, dest_addr, (int8_t *)interface);
-    memcpy(default_tx_packet, dest_addr, sizeof(dest_addr));
-    memcpy(default_tx_packet + 6, glob_station_addr, sizeof(glob_station_addr));
-
-    // AVB Q-Tag header
-    ((char *)default_tx_packet)[12] = 0x81;
-    ((char *)default_tx_packet)[13] = 0x00;
-    ((char *)default_tx_packet)[14] =
-            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
-    ((char *)default_tx_packet)[15] =
-            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
-    ((char *)default_tx_packet)[16] = 0x22;	/* 1722 eth type */
-    ((char *)default_tx_packet)[17] = 0xF0;
-
-    // Set default 1722 header
-    avb_initialize_h1722_to_defaults(hdr1722);
-    avb_set_1722_sid_valid(hdr1722, 0x1);
-    avb_hdr1722_set_streamID(hdr1722, glob_station_addr);
-    // Set default 61883 header
-    avb_initialize_61883_to_defaults(hdr61883);
-    avb_set_61883_format_tag(hdr61883, 0x1);
-    avb_set_61883_packet_channel(hdr61883, 0x1F);
-    avb_set_61883_packet_tcode(hdr61883, 0xA);
-    avb_set_61883_source_id(hdr61883 , 0x3F);
-    avb_set_61883_data_block_size(hdr61883, 0x1);
-    avb_set_61883_eoh(hdr61883, 0x2);
-    avb_set_61883_format_id(hdr61883, 0x10);
-    avb_set_61883_format_dependent_field(hdr61883, 0x02);
-    avb_set_61883_syt(hdr61883, 0xFFFF);
-
+    // Prepare DMA mapping
     a_packet.dmatime = a_packet.attime = a_packet.flags = 0;
     a_packet.map.paddr = a_page.dma_paddr;
     a_packet.map.mmap_size = a_page.mmap_size;
@@ -588,7 +712,7 @@ int main
     a_packet.next = NULL;
     free_packets = NULL;
     seqnum = 0;
-    rtp_timestamp = 0; /* Should be random start */
+    // rtp_timestamp = 0; /* Should be random start */
 
     /* divide the dma page into buffers for packets */
     for (i = 1; i < ((a_page.mmap_size) / packet_size); i++) {
@@ -602,100 +726,12 @@ int main
         tmp_packet->vaddr += tmp_packet->offset;
         tmp_packet->next = free_packets;
 
+        // Default structure for each packet
         memcpy(((char *)tmp_packet->vaddr), default_tx_packet, frame_size);
-
-//        memset(tmp_packet->vaddr, 0, packet_size);	/* MAC header at least */
-//        memcpy(tmp_packet->vaddr, dest_addr, sizeof(dest_addr));
-//        memcpy(tmp_packet->vaddr + 6, glob_station_addr,
-//               sizeof(glob_station_addr));
-
-//        /* Q-tag */
-//        ((char *)tmp_packet->vaddr)[12] = 0x81;
-//        ((char *)tmp_packet->vaddr)[13] = 0x00;
-//        ((char *)tmp_packet->vaddr)[14] =
-//            ((domain_class_a_priority << 13 | domain_class_a_vid)) >> 8;
-//        ((char *)tmp_packet->vaddr)[15] =
-//            ((domain_class_a_priority << 13 | domain_class_a_vid)) & 0xFF;
-//        if( transport == 2 ) {
-//            ((char *)tmp_packet->vaddr)[16] = 0x22;	/* 1722 eth type */
-//            ((char *)tmp_packet->vaddr)[17] = 0xF0;
-//        } else {
-//            ((char *)tmp_packet->vaddr)[16] = 0x08;	/* IP eth type */
-//            ((char *)tmp_packet->vaddr)[17] = 0x00;
-//        }
-
-        if( transport == 2 ) {
-//            // Initialize 1722 header + payload
-//            l2_header0 = (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
-//            avb_initialize_h1722_to_defaults(l2_header0);
-//            avb_set_1722_sid_valid(l2_header0, 0x1);
-//            avb_hdr1722_set_streamID(l2_header0, glob_station_addr); // TODO: replace with avb.h call
-            
-//            // Initialize 61883 header
-//            l2_header1 = (six1883_header *) (l2_header0 + 1);
-//            avb_initialize_61883_to_defaults(l2_header1);
-//            avb_set_61883_format_tag(l2_header1, 0x1);
-//            avb_set_61883_packet_channel(l2_header1, 0x1F);
-//            avb_set_61883_packet_tcode(l2_header1, 0xA);
-//            avb_set_61883_source_id(l2_header1 , 0x3F);
-//            avb_set_61883_data_block_size(l2_header1, 0x1);
-//            avb_set_61883_eoh(l2_header1, 0x2);
-//            avb_set_61883_format_id(l2_header1, 0x10);
-//            avb_set_61883_format_dependent_field(l2_header1, 0x02);
-//            avb_set_61883_syt(l2_header1, 0xFFFF);
-
-            tmp_packet->len =
-                frame_size +
+        tmp_packet->len =
+                sizeof(eth_header) + 4 + sizeof(seventeen22_header) + sizeof(six1883_header) +
                 (L2_SAMPLES_PER_FRAME * CHANNELS * sizeof(six1883_sample));
-        } else {
-            pseudo_hdr.source = l4_local_address;
-            memcpy
-                ( &pseudo_hdr.dest, glob_l3_dest_addr, sizeof( pseudo_hdr.dest ));
-            pseudo_hdr.zero = 0;
-            pseudo_hdr.protocol = 0x11;
-            pseudo_hdr.length = htons(packet_size-18-20);
 
-            l4_headers =
-                (IP_RTP_Header *) (((char *)tmp_packet->vaddr) + 18);
-            l4_headers->version_length = 0x45;
-            l4_headers->DSCP_ECN = 0x20;
-            l4_headers->ip_length = htons(packet_size-18);
-            l4_headers->id = 0;
-            l4_headers->fragmentation = 0;
-            l4_headers->ttl = 64;
-            l4_headers->protocol = 0x11;
-            l4_headers->hdr_cksum = 0;
-            l4_headers->src = l4_local_address;
-            memcpy
-                ( &l4_headers->dest, glob_l3_dest_addr, sizeof( l4_headers->dest ));
-            {
-                struct iovec iv0;
-                iv0.iov_base = l4_headers;
-                iv0.iov_len = 20;
-                l4_headers->hdr_cksum =
-                    inet_checksum_sg( &iv0, 1 );
-            }
-
-            l4_headers->source_port = htons(L4_PORT);
-            l4_headers->dest_port = htons(L4_PORT);
-            l4_headers->udp_length = htons(packet_size-18-20);
-
-            l4_headers->version_cc = 2;
-            l4_headers->mark_payload = L16_PAYLOAD_TYPE;
-            l4_headers->sequence = 0;
-            l4_headers->timestamp = 0;
-            l4_headers->ssrc = 0;
-
-            l4_headers->tag[0] = 0xBE;
-            l4_headers->tag[1] = 0xDE;
-            l4_headers->total_length = htons(2);
-            l4_headers->tag_length = (6 << 4) | ID_B_HDR_EXT_ID;
-
-            tmp_packet->len =
-                18 + sizeof(*l4_headers) +
-                (L4_SAMPLES_PER_FRAME * CHANNELS * L4_SAMPLE_SIZE );
-
-        }
         free_packets = tmp_packet;
     }
     free(default_tx_packet);
@@ -706,51 +742,10 @@ int main
      *
      * IPG is scaled to the Class (A) observation interval of packets per 125 usec.
      */
-    fprintf(stderr, "advertising stream ...\n");
-    if( transport == 2 ) {
-        rc = mrp_advertise_stream(glob_stream_id, dest_addr,
-                    domain_class_a_vid, PKT_SZ - 16,
-                    L2_PACKET_IPG / 125000,
-                    MSRP_SR_CLASS_A_PRIO, 3900);
-        sleep(1);
-        printf("Global stream id: %x%x %x%x\n",
-               (uint) glob_stream_id[0], (uint) glob_stream_id[5],
-               (uint) glob_stream_id[6], (uint) glob_stream_id[7]);
-
-        {
-            // Creating a second stream
-            uint8_t dest_addr_s2[8];
-
-            // Set global stream id for second stream
-            memcpy(glob_stream_id2, glob_station_addr, sizeof(glob_station_addr));
-            printf("Global stream id: %x%x %x%x\n",
-                   (uint) glob_stream_id2[0], (uint) glob_stream_id2[5],
-                   (uint) glob_stream_id2[6], (uint) glob_stream_id2[7]);
-
-            // New destination id +1 to define new communication domain
-            memset(dest_addr_s2, 0, sizeof(dest_addr_s2));
-            memcpy(dest_addr_s2, glob_l2_dest_addr, sizeof(dest_addr_s2));
-            dest_addr_s2[5] = 0x81;
-            rc += mrp_advertise_stream(glob_stream_id2, dest_addr_s2,
-                        domain_class_b_vid, PKT_SZ - 16,
-                        L2_PACKET_IPG / (125000 / 2), // 1 packets every 2 * 250 usec
-                        MSRP_SR_CLASS_B_PRIO, 3900);
-        }
-        
-    } else {
-        /*
-         * 1 is the wrong number for frame rate, but fractional values
-         * not allowed, not sure the significance of the value 6, but
-         * using it consistently
-         */
-        rc = mrp_advertise_stream(glob_stream_id, dest_addr,
-                    domain_class_a_vid,
-                    sizeof(*l4_headers) + L4_SAMPLES_PER_FRAME * CHANNELS * 2 + 6,
-                    1,
-                    domain_class_a_priority, 3900);
-    }
-    if (rc) {
-        printf("mrp_advertise_stream failed\n");
+    rc = advertise_streams(streamState, 0);
+    if (0 != rc)
+    {
+        printf("Advertising streams failed.\n");
         return EXIT_FAILURE;
     }
 
@@ -783,106 +778,70 @@ int main
     delta_8021as = (unsigned)(td.ml_freqoffset * delta_local);
     now_8021as = update_8021as + delta_8021as;
 
+    // Accounting for delay until listener accepts stream
     last_time = now_local + XMIT_DELAY;
     time_stamp = now_8021as + RENDER_DELAY;
 
     rc = nice(-20);
 
+    // Prepare packets for the subscribed listeners and submit them
+
+    current_listener_id = -1;
     while (listeners && !halt_tx) {
+        char *raw_tx_packet;
+        streamDesc_t *curStream;
+
         tmp_packet = free_packets;
         if (NULL == tmp_packet)
             goto cleanup;
-
         free_packets = tmp_packet->next;
 
-        if( transport == 2 ) {
-            uint32_t timestamp_l;
-            get_samples( L2_SAMPLES_PER_FRAME, sample_buffer );
-            l2_header0 =
-                (seventeen22_header *) (((char *)tmp_packet->vaddr) + 18);
-            l2_header1 = (six1883_header *) (l2_header0 + 1);
+        uint32_t timestamp_l;
+        get_samples( L2_SAMPLES_PER_FRAME, sample_buffer );
+        raw_tx_packet = (char *)tmp_packet->vaddr;
+        l2_header0 =
+                (seventeen22_header *) (raw_tx_packet + 18);
+        l2_header1 = (six1883_header *) (l2_header0 + 1);
 
-            /* unfortuntely unless this thread is at rtprio
-             * you get pre-empted between fetching the time
-             * and programming the packet and get a late packet
-             */
-            tmp_packet->attime = last_time + L2_PACKET_IPG;
-            last_time += L2_PACKET_IPG;
+        // Adapt package for current listener (if multiple)
+        current_listener_id = (current_listener_id + 1) % num_streams;
+        curStream = &(streamState[current_listener_id]);
 
-            l2_header0->seq_number = seqnum++;
-            if (seqnum % 4 == 0)
-                l2_header0->timestamp_valid = 0;
+        avb_eth_header_set_dest_mac((eth_header *)raw_tx_packet, curStream->l2_dest_addr);
+        memcpy(&(l2_header0->stream_id), curStream->stream_ID, STREAM_ID_SIZE);
 
-            else
-                l2_header0->timestamp_valid = 1;
-
-            timestamp_l = time_stamp;
-            l2_header0->timestamp = htonl(timestamp_l);
-            time_stamp += L2_PACKET_IPG;
-            l2_header1->data_block_continuity = total_samples;
-            total_samples += L2_SAMPLES_PER_FRAME*CHANNELS;
-            sample =
+        /* unfortuntely unless this thread is at rtprio
+         * you get pre-empted between fetching the time
+         * and programming the packet and get a late packet
+         */
+        tmp_packet->attime = last_time + L2_PACKET_IPG;
+        last_time += L2_PACKET_IPG;
+        
+        l2_header0->seq_number = seqnum++;
+        if (seqnum % 4 == 0)
+            l2_header0->timestamp_valid = 0;
+        
+        else
+            l2_header0->timestamp_valid = 1;
+        
+        timestamp_l = time_stamp;
+        l2_header0->timestamp = htonl(timestamp_l);
+        time_stamp += L2_PACKET_IPG;
+        l2_header1->data_block_continuity = total_samples;
+        total_samples += L2_SAMPLES_PER_FRAME*CHANNELS;
+        sample =
                 (six1883_sample *) (((char *)tmp_packet->vaddr) +
                                     (18 + sizeof(seventeen22_header) +
                                      sizeof(six1883_header)));
 
-            for (i = 0; i < L2_SAMPLES_PER_FRAME * CHANNELS; ++i) {
-                uint32_t tmp = htonl(sample_buffer[i]);
-                sample[i].label = 0x40;
-                memcpy(&(sample[i].value), &(tmp),
-                       sizeof(sample[i].value));
-            }
-        } else {
-            uint16_t *l16_sample;
-            uint8_t *tmp;
-            get_samples( L4_SAMPLES_PER_FRAME, sample_buffer );
-
-            l4_headers =
-                (IP_RTP_Header *) (((char *)tmp_packet->vaddr) + 18);
-
-            l4_headers->sequence =  seqnum++;
-            l4_headers->timestamp = rtp_timestamp;
-
-            tmp_packet->attime = last_time + L4_PACKET_IPG;
-            last_time += L4_PACKET_IPG;
-
-            l4_headers->nanoseconds = time_stamp/1000000000;
-            tmp = (uint8_t *) &l4_headers->nanoseconds;
-            l4_headers->seconds[0] = tmp[2];
-            l4_headers->seconds[1] = tmp[1];
-            l4_headers->seconds[2] = tmp[0];
-            {
-                uint64_t tmp;
-                tmp  = time_stamp % 1000000000;
-                tmp *= RTP_SUBNS_SCALE_NUM;
-                tmp /= RTP_SUBNS_SCALE_DEN;
-                l4_headers->nanoseconds = (uint32_t) tmp;
-            }
-            l4_headers->nanoseconds = htons(l4_headers->nanoseconds);
-
-
-            time_stamp += L4_PACKET_IPG;
-
-            l16_sample = (uint16_t *) (l4_headers+1);
-
-            for (i = 0; i < L4_SAMPLES_PER_FRAME * CHANNELS; ++i) {
-                uint16_t tmp = sample_buffer[i]/65536;
-                l16_sample[i] = htons(tmp);
-            }
-            l4_headers->cksum = 0;
-            {
-                struct iovec iv[2];
-                iv[0].iov_base = &pseudo_hdr;
-                iv[0].iov_len = sizeof(pseudo_hdr);
-                iv[1].iov_base = ((uint8_t *)l4_headers) + 20;
-                iv[1].iov_len = packet_size-18-20;
-                l4_headers->cksum =
-                    inet_checksum_sg( iv, 2 );
-            }
+        for (i = 0; i < L2_SAMPLES_PER_FRAME * CHANNELS; ++i) {
+            uint32_t tmp = htonl(sample_buffer[i]);
+            sample[i].label = 0x40;
+            memcpy(&(sample[i].value), &(tmp),
+                   sizeof(sample[i].value));
         }
 
         err = igb_xmit(&igb_dev, TX_QUEUE, tmp_packet);
-        // err += igb_xmit(&igb_dev, TX_QUEUE+1, tmp_packet);
 
         if (!err) {
             continue;
@@ -896,6 +855,7 @@ int main
         }
 
     cleanup:
+        // Blocking function: will return empty list only after everything was sent
         igb_clean(&igb_dev, &cleaned_packets);
         i = 0;
         while (cleaned_packets) {
@@ -912,20 +872,13 @@ int main
         printf("listener left ...\n");
     halt_tx = 1;
 
-    if( transport == 2 ) {
-        rc = mrp_unadvertise_stream
-            (glob_stream_id, dest_addr, domain_class_a_vid, PKT_SZ - 16, L2_PACKET_IPG / 125000,
-             domain_class_a_priority, 3900);
-    } else {
-        rc = mrp_unadvertise_stream
-            (glob_stream_id, dest_addr, domain_class_a_vid,
-             sizeof(*l4_headers)+L4_SAMPLES_PER_FRAME*CHANNELS*2 + 6, 1,
-             domain_class_a_priority, 3900);
-    }
+    rc = advertise_streams(streamState, 1);
     if (rc)
         printf("mrp_unadvertise_stream failed\n");
 
     igb_set_class_bandwidth(&igb_dev, 0, 0, 0, 0);	/* disable Qav */
+
+    deinitialize_streams(&streamState);
 
     rc = mrp_disconnect();
     if (rc)

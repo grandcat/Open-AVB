@@ -63,7 +63,7 @@ typedef struct __attribute__ ((packed)) {
 } seventeen22_header;
 
 /* 61883 CIP with SYT Field */
-typedef struct {
+typedef struct __attribute__ ((packed)) {
 	uint16_t packet_channel:6;
 	uint16_t format_tag:2;
 	uint16_t app_control:4;
@@ -193,6 +193,8 @@ void avb_initialize_h1722_to_defaults(seventeen22_header *h1722);
 void avb_initialize_61883_to_defaults(six1883_header *h61883);
 
 int32_t avb_get_iface_mac_address(int8_t *iface, uint8_t *addr);
+
+void avb_eth_header_set_dest_mac(eth_header *ethernet_header, uint8_t *dst_addr);
 
 int32_t
 avb_eth_header_set_mac(eth_header *ethernet_header, uint8_t *dst_addr, int8_t *iface);
