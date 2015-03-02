@@ -24,11 +24,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "listener_mrp_client.h"
 
+#include "parse.h"
+
 /* global variables */
 
 int control_socket;
 volatile int talker = 0;
-unsigned char stream_id[8];
+unsigned char global_stream_id[8];
 
 /*
  * private
@@ -52,30 +54,78 @@ int send_msg(char *data, int data_len)
 		(struct sockaddr*)&addr, (socklen_t)sizeof(addr));
 }
 
-int msg_process(char *buf, int buflen)
+/**
+ * \brief Compares stream ID of incoming MSRP messages to accepted stream
+ *        table and extracts further details about the advertised stream if it
+ *        is a required stream.
+ *
+ * \param[in]  buf      Input message buffer of MRP daemon
+ * \param[in]  buflen   Length of input message
+ * \param[out] matched_stream   Matching stream descriptor if suitable stream
+ *                              was found
+ * \return success if 0
+ */
+int msg_match_streams
+(
+    char *buf,
+    int buflen,
+    streamDesc_t **matched_stream
+)
 {
-	uint32_t id;
-	int j, l;
+    int parseErr, i;
+    int res = -1;
 
-	fprintf(stderr, "Msg: %s\n", buf);
-	if (strncmp(buf, "SNE T:", 6) == 0 || strncmp(buf, "SJO T:", 6) == 0)
-	{
-		l = 6; /* skip "Sxx T:" */
-		while ((l < buflen) && ('S' != buf[l++]));
-		if (l == buflen)
-			return -1;
-		l++;
-		for(j = 0; j < 8 ; l+=2, j++)
-		{
-			sscanf(&buf[l],"%02x",&id);
-			stream_id[j] = (unsigned char)id;
-		}
-		talker = 1;
-	}
-	return 0;
+    struct parse_param parse_specs[] = {
+        {"S" PARSE_ASSIGN, parse_c64, global_stream_id},
+//        {"L" PARSE_ASSIGN, parse_u32, &talker_ad->AccumulatedLatency},
+        {0, parse_null, 0}
+    };
+
+    fprintf(stderr, "Rcvd msg: %s\n", buf);
+    if (strncmp(buf, "SNE T:", 6) == 0 || strncmp(buf, "SJO T:", 6) == 0)
+    {
+        parse(buf, buflen, parse_specs, &parseErr);
+        printf("Extracted stream ID (err: %i): ", parseErr);
+        print_stream(global_stream_id);
+
+        // Match stream IDs against set of prefefined IDs for multiple
+        // stream support
+        if (parseErr)
+            return -1;
+
+        for (i = 0; i < num_streams; i++)
+        {
+            streamDesc_t *streamIter = &(streams[i]);
+            if (0 == memcmp(streamIter->stream_ID, global_stream_id, 8)
+                    && 0 == streamIter->spawned)
+            {
+                streamIter->spawned = 1;    // will be spawned right after
+                if (0 != matched_stream)
+                    *matched_stream = streamIter;
+                res = 0;
+                // Debug
+                printf("MRPD accepted stream: ");
+                print_stream(global_stream_id);
+            }
+        }
+        if (!parseErr && res)
+        {
+            // Keep this variable for legacy reasons like jackd talker
+            talker = 1;
+        }
+    }
+    return res;
 }
 
-int recv_msg()
+/*
+ * public
+ */
+
+int
+mrp_retrieve_stream
+(
+    streamDesc_t **matched_stream
+)
 {
 	char *databuf;
 	int bytes = 0;
@@ -92,15 +142,11 @@ int recv_msg()
 		free(databuf);
 		return -1;
 	}
-	ret = msg_process(databuf, bytes);
+    ret = msg_match_streams(databuf, bytes, matched_stream);
 	free(databuf);
 
 	return ret;
 }
-
-/*
- * public
- */
 
 int create_socket() // TODO FIX! =:-|
 {
@@ -168,12 +214,16 @@ int join_vlan()
 
 int await_talker()
 {
-	while (0 == talker)	
-		recv_msg();
-	return 0;
+    int match = -1;
+    while (0 != match)
+        match = mrp_retrieve_stream(NULL);
+    return 0;
 }
 
-int send_ready()
+int send_ready
+(
+    u_int8_t streamID[]
+)
 {
 	char *databuf;
 	int rc;
@@ -182,11 +232,11 @@ int send_ready()
 	if (NULL == databuf)
 		return -1;
 	memset(databuf, 0, 1500);
-	sprintf(databuf, "S+L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=2",
-		     stream_id[0], stream_id[1],
-		     stream_id[2], stream_id[3],
-		     stream_id[4], stream_id[5],
-		     stream_id[6], stream_id[7]);
+    sprintf(databuf, "S+L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=2",
+            streamID[0], streamID[1],
+            streamID[2], streamID[3],
+            streamID[4], streamID[5],
+            streamID[6], streamID[7]);
 	rc = send_msg(databuf, 1500);
 	free(databuf);
 
@@ -206,10 +256,10 @@ int send_leave()
 		return -1;
 	memset(databuf, 0, 1500);
 	sprintf(databuf, "S-L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=3",
-		     stream_id[0], stream_id[1],
-		     stream_id[2], stream_id[3],
-		     stream_id[4], stream_id[5],
-		     stream_id[6], stream_id[7]);
+             global_stream_id[0], global_stream_id[1],
+             global_stream_id[2], global_stream_id[3],
+             global_stream_id[4], global_stream_id[5],
+             global_stream_id[6], global_stream_id[7]);
 	rc = send_msg(databuf, 1500);
 	free(databuf);
 
@@ -236,4 +286,15 @@ int mrp_disconnect()
 		return -1;
 	else
 		return 0;
+}
+
+inline
+void print_stream
+(
+    uint8_t stream_ID[]
+)
+{
+    printf("%02x %02x %02x %02x %02x %02x %02x %02x\n",
+           stream_ID[0], stream_ID[1], stream_ID[2], stream_ID[3],
+            stream_ID[4], stream_ID[5], stream_ID[6], stream_ID[7]);
 }

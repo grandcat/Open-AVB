@@ -150,7 +150,7 @@ void pcap_callback(u_char* args, const struct pcap_pkthdr* packet_header, const 
 	}
 
 	test_stream_id = (unsigned char*)(packet + ETHERNET_HEADER_SIZE + SEVENTEEN22_HEADER_PART1_SIZE);
-	if (0 != memcmp(test_stream_id, stream_id, STREAM_ID_SIZE)) {
+	if (0 != memcmp(test_stream_id, global_stream_id, STREAM_ID_SIZE)) {
 		return;
 	}
 		

@@ -34,6 +34,9 @@
  * an endpoint implementation of 802.1Q-2011 MRP (MMRP, MVRP, MSRP)
  */
 
+#ifndef _MRPD_H_
+#define _MRPD_H_
+
 /* Operating specific defines */
 #if defined WIN32
 #include <winsock2.h>
@@ -134,3 +137,5 @@ int mrpd_close_socket(SOCKET sock);
 int mrpd_recvmsgbuf(SOCKET sock, char **buf);
 
 void mrpd_log_printf(const char *fmt, ...);
+
+#endif /* _MRPD_H_ */

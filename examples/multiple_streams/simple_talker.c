@@ -425,6 +425,14 @@ avb_prepare_packet_structure
     seventeen22_header *hdr1722;
     six1883_header *hdr61883;
 
+    // Put together all required headers for an AVB 1722 packet
+    //
+    // Consists of the following headers
+    // * Ethernet (MAC) header
+    // * 802.1Q tag header
+    // * 1722 AVB header (includes presentation time)
+    // * Audio sample data specific 61883 header
+
     hdr1722 = (seventeen22_header *)((char *)tx_packet + sizeof(eth_header) + 4);
     hdr61883 = (six1883_header *) (hdr1722 + 1);
 
@@ -674,7 +682,7 @@ int main
         return EXIT_FAILURE;
     }
 
-    // Reservations for parallel class A and class B streams
+    // Reservations on driver level for parallel class A and class B streams
     rc = igb_set_class_bandwidth
             (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG,
              PKT_SZ - 22, PKT_SZ - 22);
@@ -693,7 +701,7 @@ int main
         packet_size = PKT_SZ;
     } else {
         packet_size = 18 + sizeof(*l4_headers) +
-                (L4_SAMPLES_PER_FRAME * CHANNELS * L4_SAMPLE_SIZE );
+                (L4_SAMPLES_PER_FRAME * CHANNELS * L4_SAMPLE_SIZE);
     }
 
     // Prepare basic structure for all packets

@@ -110,7 +110,7 @@ void pcap_callback(u_char* args, const struct pcap_pkthdr* packet_header, const 
 			     test_stream_id[6], test_stream_id[7]);
 #endif /* DEBUG*/
 
-		if (0 == memcmp(test_stream_id, stream_id, sizeof(STREAM_ID_SIZE)))
+		if (0 == memcmp(test_stream_id, global_stream_id, sizeof(STREAM_ID_SIZE)))
 		{
 
 #if DEBUG
@@ -225,7 +225,7 @@ int main(int argc, char *argv[])
 #if DEBUG
 	fprintf(stdout,"Send ready-msg...\n");
 #endif /* DEBUG */
-	rc = send_ready();
+    rc = send_ready(global_stream_id);
 	if (rc) {
 		printf("send_ready failed\n");
 		return EXIT_FAILURE;

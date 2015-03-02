@@ -1,7 +1,7 @@
 CC=gcc
 OPT=-O2 -g
 CFLAGS=$(OPT) -Wall -Wextra -Wno-parentheses
-INCFLAGS=-I ../../lib/igb -I../../daemons/mrpd -I../common
+INCFLAGS=-I ../../lib/igb -I../../daemons/common -I../common -I../../daemons/mrpd
 LDLIBS=-ligb -lpci -lrt -lm -pthread -lpcap -lsndfile
 LDFLAGS=-L ../../lib/igb
 
@@ -18,7 +18,7 @@ simple_talker.o: simple_talker.c
 ../common/avb.o: ../common/avb.c ../common/avb.h
 	make -C ../common/ avb.o
 
-simple_listener: simple_listener.o ../common/listener_mrp_client.o
+simple_listener: simple_listener.o ../common/listener_mrp_client.o ../../daemons/common/parse.o 
 
 simple_listener.o: simple_listener.c
 	$(CC) $(CFLAGS) $(INCFLAGS) -c simple_listener.c
@@ -26,6 +26,11 @@ simple_listener.o: simple_listener.c
 ../common/listener_mrp_client.o: ../common/listener_mrp_client.c ../common/listener_mrp_client.h
 	make -C ../common/ listener_mrp_client.o
 
+#parse.o: ../../daemons/common/parse.c ../../daemons/common/parse.h
+#	make -C ../../daemons/common/ parse.c
+
+%.o: %.c
+	$(CC) -c $(INCFLAGS) $(CFLAGS) -o $@  $<
 %: %.o
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 

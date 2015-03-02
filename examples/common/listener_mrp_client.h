@@ -37,22 +37,45 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "mrpd.h"
 
-/* global variables */
+typedef struct streamDesc_s {
+    uint8_t stream_ID[8];   //< matching stream ID
+    int spawned;            //< true if thread already spawned after successful match of stream ID
+    // Statistics
+    int received_packets;
+} streamDesc_t;
 
+typedef struct streamRxThread_s {
+    pthread_t threadHandle;
+    int threadID;
+    streamDesc_t *streamInfo;
+} streamRxThread_t;
+
+#define NUM_ACCEPTED_STREAMS 2
+extern const unsigned char accepted_stream_ids[NUM_ACCEPTED_STREAMS][8];
+
+extern streamDesc_t *streams;
+extern int num_streams;
+
+/* global variables */
 // TODO move these in a talker_context struct + init func
 
 extern int control_socket;
 extern volatile int talker;
-extern unsigned char stream_id[8];
+extern unsigned char global_stream_id[8];
 
 /* functions */
 
 int create_socket();
 int report_domain_status();
 int join_vlan();
+int mrp_retrieve_stream(streamDesc_t **matched_stream);
 int await_talker();
-int send_ready();
+int send_ready(u_int8_t streamID[]);
 int send_leave();
 int mrp_disconnect();
+
+/* helper functions */
+inline
+void print_stream(uint8_t stream_ID[]);
 
 #endif /* _LISTENER_MRP_CLIENT_H_ */
