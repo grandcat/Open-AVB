@@ -96,7 +96,7 @@ void shutdown_and_exit(int sig)
 	fprintf(stdout,"Leaving...\n");
 
 	if (0 != talker) {
-		ret = send_leave();
+        ret = send_leave(global_stream_id);
 		if (ret)
 			printf("send_leave failed\n");
 	}

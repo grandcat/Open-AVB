@@ -54,6 +54,14 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SAMPLES_PER_FRAME (6)
 #define CHANNELS (2)
 
+typedef struct streamRxThread_s {
+    pthread_t threadHandle;
+    int threadID;
+    pcap_t* pcap_handle;
+    SNDFILE* snd_file_handle;
+    streamDesc_t *streamInfo;
+} streamRxThread_t;
+
 struct q_eth_hdr{
     u_char dst[6];
     u_char src[6];
@@ -83,6 +91,7 @@ streamRxThread_t rx_threads[NUM_ACCEPTED_STREAMS];
 int num_threads = 0;
 
 char *dev = NULL;
+char* base_file_name = NULL;
 pcap_t* glob_pcap_handle;
 const u_int8_t glob_ether_type[] = {0x22, 0xF0};
 SNDFILE* glob_snd_file;
@@ -156,41 +165,6 @@ void pcap_callback(u_char* args, const struct pcap_pkthdr* packet_header, const 
     }
 }
 
-void sigint_handler(int signum)
-{
-    int ret;
-
-    fprintf(stdout,"Received signal %d:leaving...\n", signum);
-    halt = 1;
-
-    if (0 != talker) {
-        ret = send_leave();
-        if (ret)
-            printf("send_leave failed\n");
-    }
-
-    if (2 > control_socket)
-    {
-        close(control_socket);
-        ret = mrp_disconnect();
-        if (ret)
-            printf("mrp_disconnect failed\n");
-    }
-
-#if PCAP
-    if (NULL != glob_pcap_handle)
-    {
-        pcap_breakloop(glob_pcap_handle);
-        pcap_close(glob_pcap_handle);
-    }
-#endif /* PCAP */
-
-#if LIBSND
-    sf_write_sync(glob_snd_file);
-    sf_close(glob_snd_file);
-#endif /* LIBSND */
-}
-
 static void
 initialize_accepted_streams
 (
@@ -223,6 +197,32 @@ initialize_accepted_streams
     }
 }
 
+static void
+deinitialize_streams
+(
+    streamDesc_t **streams
+)
+{
+    int i;
+
+    assert(0 != *streams);
+    // Leave stream(s) if it was used
+    printf("MRPD: leave streams.\n");
+
+    for (i = 0; i < num_streams; ++i)
+    {
+        streamDesc_t *streamIter = &((*streams)[i]);
+        if (0 != streamIter->spawned)
+        {
+            // send leave indication
+            send_leave(streamIter->stream_ID);
+        }
+    }
+
+    free(*streams);
+}
+
+
 void
 pcap_parse_packet
 (
@@ -236,6 +236,7 @@ pcap_parse_packet
 
     (void) packet_header; /* unused */
     streamRxThread_t *thread_config = (streamRxThread_t *)arg;
+    streamDesc_t *stream = thread_config->streamInfo;
 
 #if DEBUG
     fprintf(stdout,"Got packet.\n");
@@ -250,16 +251,22 @@ pcap_parse_packet
     if (0 == memcmp(glob_ether_type, eth_header->type, sizeof(eth_header->type)))
     {
         found_streamID = (u_int8_t *)(packet + ETHERNET_HEADER_SIZE + SEVENTEEN22_HEADER_PART1_SIZE);
-        printf("T%i: got packet with stream ID ", thread_config->threadID);
-        print_stream(found_streamID);
+        // Select only packets for owned streamID
+        if (0 == memcmp(stream->stream_ID, found_streamID, STREAM_ID_SIZE))
+        {
+            stream->received_packets++;
+            printf("T%i: got packet with my stream ID ", thread_config->threadID);
+            print_stream(found_streamID);
+        }
     }
 }
 
 static void *
 rx_thread(void *arg) {
-    pcap_t* pcap_handle;
     struct bpf_program pcap_comp_filter_exp;
     char errbuf[PCAP_ERRBUF_SIZE];
+    SF_INFO* sf_info;
+    char filename[20];
 
     streamRxThread_t *thread_config = (streamRxThread_t *)arg;
     int res;
@@ -275,31 +282,45 @@ rx_thread(void *arg) {
     }
 
     // Setting up blocking PCAP Loop for packet processing
-    pcap_handle = pcap_open_live(dev, BUFSIZ, 1, -1, errbuf);
-    if (NULL == pcap_handle)
+    thread_config->pcap_handle = pcap_open_live(dev, BUFSIZ, 1, -1, errbuf);
+    if (NULL == thread_config->pcap_handle)
     {
         fprintf(stderr, "Thread: could not open device %s: %s\n", dev, errbuf);
         return NULL;
     }
     // PCAP filter
-    if (-1 == pcap_compile(pcap_handle, &pcap_comp_filter_exp, filter_exp, 0, PCAP_NETMASK_UNKNOWN))
+    if (-1 == pcap_compile(thread_config->pcap_handle, &pcap_comp_filter_exp, filter_exp, 0, PCAP_NETMASK_UNKNOWN))
     {
-        fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp, pcap_geterr(pcap_handle));
+        fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp, pcap_geterr(thread_config->pcap_handle));
+        return NULL;
+    }
+    if (-1 == pcap_setfilter(thread_config->pcap_handle, &pcap_comp_filter_exp))
+    {
+        fprintf(stderr, "Could not install filter %s: %s\n", filter_exp, pcap_geterr(thread_config->pcap_handle));
         return NULL;
     }
 
-    if (-1 == pcap_setfilter(pcap_handle, &pcap_comp_filter_exp))
+    // Create file for storing received packets
+    sf_info = (SF_INFO *)calloc(sizeof(SF_INFO), 1);
+
+    sf_info->samplerate = SAMPLES_PER_SECOND;
+    sf_info->channels = CHANNELS;
+    sf_info->format = SF_FORMAT_WAV | SF_FORMAT_PCM_24;
+    assert(0 != sf_format_check(sf_info));
+
+    sprintf(filename, "output_%i.wav", thread_config->threadID);
+    if (NULL == (thread_config->snd_file_handle = sf_open(filename, SFM_WRITE, sf_info)))
     {
-        fprintf(stderr, "Could not install filter %s: %s\n", filter_exp, pcap_geterr(pcap_handle));
+        fprintf(stderr, "RX thread %i: could not create file.", thread_config->threadID);
         return NULL;
     }
+    printf("RX thread %i: created file called %s\n", thread_config->threadID, filename);
 
-    // Start packet sniffing
-    pcap_loop(pcap_handle, -1, pcap_parse_packet, (u_char *)thread_config);
+    // Start packet processing loop (blocking)
+    pcap_loop(thread_config->pcap_handle, -1, pcap_parse_packet, (u_char *)thread_config);
 
-    // Deinitialize PCAP
-    pcap_breakloop(pcap_handle);
-    pcap_close(pcap_handle);
+    free(sf_info);
+    printf("RX thread %i stopped.\n", thread_config->threadID);
 
     return NULL;
 }
@@ -321,31 +342,58 @@ manage_rx_threads()
             thread_config->threadID = num_threads;
             num_threads++;
             thread_config->streamInfo = matchedStream;
+
             pthread_create(&(thread_config->threadHandle), NULL, rx_thread, thread_config);
         }
     }
 }
 
-static void
-deinitialize_streams
-(
-    streamDesc_t **streams
-)
+void sigint_handler(int signum)
 {
-    assert(0 != *streams);
-//    for (i = 0; i < number_of_streams; ++i)
-//    {
-//        streamRxThread_t *rx_thread = &((*streams)[i]);
-//        free(rx_thread->streamInfo);
+    int ret, i;
+
+    fprintf(stdout,"Received signal %d:leaving...\n", signum);
+    halt = 1;
+
+//    if (0 != talker) {
+//        ret = send_leave();
+//        if (ret)
+//            printf("send_leave failed\n");
 //    }
-    free(*streams);
+
+    if (2 > control_socket)
+    {
+        close(control_socket);
+        ret = mrp_disconnect();
+        if (ret)
+            printf("mrp_disconnect failed\n");
+    }
+
+    // Stop packet processing loop for all threads and sync files
+    for (i = 0; i < num_streams; ++i)
+    {
+        streamRxThread_t *rxThread = &(rx_threads[i]);
+        if (NULL != rxThread->pcap_handle)
+        {
+            pcap_breakloop(rxThread->pcap_handle);
+            pcap_close(rxThread->pcap_handle);
+
+            sf_write_sync(rxThread->snd_file_handle);
+            sf_close(rxThread->snd_file_handle);
+        }
+    }
+
+#if LIBSND
+//    sf_write_sync(glob_snd_file);
+//    sf_close(glob_snd_file);
+#endif /* LIBSND */
+
+    // Leave and cleanup streams
+    deinitialize_streams(&streams);
 }
 
 int main(int argc, char *argv[])
 {
-    char* file_name = NULL;
-    char errbuf[PCAP_ERRBUF_SIZE];
-    struct bpf_program comp_filter_exp;		/* The compiled filter expression */
     int rc;
 
     signal(SIGINT, sigint_handler);
@@ -362,14 +410,14 @@ int main(int argc, char *argv[])
             dev = strdup(optarg);
             break;
         case 'f':
-            file_name = strdup(optarg);
+            base_file_name = strdup(optarg);
             break;
         default:
                 fprintf(stderr, "Unrecognized option!\n");
         }
     }
 
-    if ((NULL == dev) || (NULL == file_name))
+    if ((NULL == dev) || (NULL == base_file_name))
         help();
 
 
@@ -397,74 +445,39 @@ int main(int argc, char *argv[])
     // Find matching streams and spawn a thread for each unique stream ID
     manage_rx_threads();
 
-#if DEBUG
-    fprintf(stdout,"Send ready-msg...\n");
-#endif /* DEBUG */
-    rc = send_ready(global_stream_id);
-    if (rc) {
-        printf("send_ready failed\n");
-        return EXIT_FAILURE;
-    }
+//#if PCAP
+//    /* session, get session handler */
+//    /* take promiscuous vs. non-promiscuous sniffing? (0 or 1) */
+//    glob_pcap_handle = pcap_open_live(dev, BUFSIZ, 1, -1, errbuf);
+//    if (NULL == glob_pcap_handle)
+//    {
+//        fprintf(stderr, "Could not open device %s: %s\n", dev, errbuf);
+//        return EXIT_FAILURE;
+//    }
 
-#if LIBSND
-    SF_INFO* sf_info = (SF_INFO*)malloc(sizeof(SF_INFO));
+//#if DEBUG
+//    fprintf(stdout,"Got session pcap handler.\n");
+//#endif /* DEBUG */
+//    /* compile and apply filter */
+//    if (-1 == pcap_compile(glob_pcap_handle, &comp_filter_exp, filter_exp, 0, PCAP_NETMASK_UNKNOWN))
+//    {
+//        fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
+//        return EXIT_FAILURE;
+//    }
 
-    memset(sf_info, 0, sizeof(SF_INFO));
+//    if (-1 == pcap_setfilter(glob_pcap_handle, &comp_filter_exp))
+//    {
+//        fprintf(stderr, "Could not install filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
+//        return EXIT_FAILURE;
+//    }
 
-    sf_info->samplerate = SAMPLES_PER_SECOND;
-    sf_info->channels = CHANNELS;
-    sf_info->format = SF_FORMAT_WAV | SF_FORMAT_PCM_24;
+//#if DEBUG
+//    fprintf(stdout,"Compiled and applied filter.\n");
+//#endif /* DEBUG */
 
-    if (0 == sf_format_check(sf_info))
-    {
-        fprintf(stderr, "Wrong format.");
-        return EXIT_FAILURE;
-    }
-
-    if (NULL == (glob_snd_file = sf_open(file_name, SFM_WRITE, sf_info)))
-    {
-        fprintf(stderr, "Could not create file.");
-        return EXIT_FAILURE;
-    }
-    fprintf(stdout,"Created file called %s\n", file_name);
-#endif /* LIBSND */
-
-#if PCAP
-    /* session, get session handler */
-    /* take promiscuous vs. non-promiscuous sniffing? (0 or 1) */
-    glob_pcap_handle = pcap_open_live(dev, BUFSIZ, 1, -1, errbuf);
-    if (NULL == glob_pcap_handle)
-    {
-        fprintf(stderr, "Could not open device %s: %s\n", dev, errbuf);
-        return EXIT_FAILURE;
-    }
-
-#if DEBUG
-    fprintf(stdout,"Got session pcap handler.\n");
-#endif /* DEBUG */
-    /* compile and apply filter */
-    if (-1 == pcap_compile(glob_pcap_handle, &comp_filter_exp, filter_exp, 0, PCAP_NETMASK_UNKNOWN))
-    {
-        fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
-        return EXIT_FAILURE;
-    }
-
-    if (-1 == pcap_setfilter(glob_pcap_handle, &comp_filter_exp))
-    {
-        fprintf(stderr, "Could not install filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
-        return EXIT_FAILURE;
-    }
-
-#if DEBUG
-    fprintf(stdout,"Compiled and applied filter.\n");
-#endif /* DEBUG */
-
-    /** loop forever and call callback-function for every received packet */
-    pcap_loop(glob_pcap_handle, -1, pcap_callback, NULL);
-#endif /* PCAP */
-
-    // Cleanup
-    deinitialize_streams(&streams);
+//    /** loop forever and call callback-function for every received packet */
+//    pcap_loop(glob_pcap_handle, -1, pcap_callback, NULL);
+//#endif /* PCAP */
 
     return EXIT_SUCCESS;
 }

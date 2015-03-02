@@ -44,12 +44,6 @@ typedef struct streamDesc_s {
     int received_packets;
 } streamDesc_t;
 
-typedef struct streamRxThread_s {
-    pthread_t threadHandle;
-    int threadID;
-    streamDesc_t *streamInfo;
-} streamRxThread_t;
-
 #define NUM_ACCEPTED_STREAMS 2
 extern const unsigned char accepted_stream_ids[NUM_ACCEPTED_STREAMS][8];
 
@@ -71,7 +65,7 @@ int join_vlan();
 int mrp_retrieve_stream(streamDesc_t **matched_stream);
 int await_talker();
 int send_ready(u_int8_t streamID[]);
-int send_leave();
+int send_leave(u_int8_t streamID[]);
 int mrp_disconnect();
 
 /* helper functions */

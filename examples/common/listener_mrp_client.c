@@ -225,48 +225,51 @@ int send_ready
     u_int8_t streamID[]
 )
 {
-	char *databuf;
-	int rc;
+    char *databuf;
+    int rc;
 
-	databuf = malloc(1500);
-	if (NULL == databuf)
-		return -1;
-	memset(databuf, 0, 1500);
+    databuf = malloc(1500);
+    if (NULL == databuf)
+        return -1;
+    memset(databuf, 0, 1500);
     sprintf(databuf, "S+L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=2",
             streamID[0], streamID[1],
             streamID[2], streamID[3],
             streamID[4], streamID[5],
             streamID[6], streamID[7]);
-	rc = send_msg(databuf, 1500);
-	free(databuf);
+    rc = send_msg(databuf, 1500);
+    free(databuf);
 
-	if (rc != 1500)
-		return -1;
-	else
-		return 0;
+    if (rc != 1500)
+        return -1;
+    else
+        return 0;
 }
 
-int send_leave()
+int send_leave
+(
+    u_int8_t streamID[]
+)
 {
-	char *databuf;
-	int rc;
+    char *databuf;
+    int rc;
 
-	databuf = malloc(1500);
-	if (NULL == databuf)
-		return -1;
-	memset(databuf, 0, 1500);
-	sprintf(databuf, "S-L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=3",
-             global_stream_id[0], global_stream_id[1],
-             global_stream_id[2], global_stream_id[3],
-             global_stream_id[4], global_stream_id[5],
-             global_stream_id[6], global_stream_id[7]);
-	rc = send_msg(databuf, 1500);
-	free(databuf);
+    databuf = malloc(1500);
+    if (NULL == databuf)
+        return -1;
+    memset(databuf, 0, 1500);
+    sprintf(databuf, "S-L:L=%02x%02x%02x%02x%02x%02x%02x%02x, D=3",
+            streamID[0], streamID[1],
+            streamID[2], streamID[3],
+            streamID[4], streamID[5],
+            streamID[6], streamID[7]);
+    rc = send_msg(databuf, 1500);
+    free(databuf);
 
-	if (rc != 1500)
-		return -1;
-	else
-		return 0;
+    if (rc != 1500)
+        return -1;
+    else
+        return 0;
 }
 
 int mrp_disconnect()

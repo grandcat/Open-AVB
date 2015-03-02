@@ -141,7 +141,7 @@ void sigint_handler(int signum)
 	fprintf(stdout,"Received signal %d:leaving...\n", signum);
 
 	if (0 != talker) {
-		ret = send_leave();
+        ret = send_leave(global_stream_id);
 		if (ret)
 			printf("send_leave failed\n");
 	}
