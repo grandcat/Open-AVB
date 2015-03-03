@@ -498,6 +498,8 @@ int mrp_await_listener(unsigned char *streamid)
 	memset(msgbuf, 0, 1500);
 	sprintf(msgbuf, "S??");
 	rc = send_mrp_msg(msgbuf, 1500);
+    // Debug
+    printf("S?? answer: %s\n", msgbuf);
 	free(msgbuf);
 	if (rc != 1500)
 		return -1;

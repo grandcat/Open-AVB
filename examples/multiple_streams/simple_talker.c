@@ -326,7 +326,7 @@ avb_hdr1722_set_streamID
 }
 
 static void
-initialize_default_streams
+init_default_streams
 (
     streamDesc_t **streams,
     int number_of_streams
@@ -405,7 +405,7 @@ advertise_streams
 }
 
 static void
-deinitialize_streams
+fini_streams
 (
     streamDesc_t **streams
 )
@@ -691,7 +691,7 @@ int main
         return EXIT_FAILURE;
     }
 
-    initialize_default_streams(&streamState, num_streams);
+    init_default_streams(&streamState, num_streams);
 
     // Note: glob_stream_id set to iface MAC address (base address)
     memset(glob_stream_id, 0, sizeof(glob_stream_id));  // stream id: 0
@@ -887,7 +887,7 @@ int main
 
     igb_set_class_bandwidth(&igb_dev, 0, 0, 0, 0);	/* disable Qav */
 
-    deinitialize_streams(&streamState);
+    fini_streams(&streamState);
 
     rc = mrp_disconnect();
     if (rc)
