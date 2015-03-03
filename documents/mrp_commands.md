@@ -28,12 +28,12 @@ S++:S=1122334455660123, (Stream ID, 8 bytes)
   * Meaning of rank: rank = 0 -> emergency traffic, rank = 1 -> normal
 
 
-## Unadvertise an exisiting stream: S--
+## Unadvertise an existing stream: S--
 
 Command:
 ```
-S--:S=0x1122334455660123, Stream ID (8 bytes)
-    A=0x91E0F0000e800000, Destination MAC (6 bytes + 2 padding)
+S--:S=1122334455660123, Stream ID (8 bytes)
+    A=91E0F0000e800000, Destination MAC (6 bytes + 2 padding)
     V=0002, (VLAN ID, 2 bytes)
     Z=00001500, (packet size as integer)
     I=00000001, (TSpec interval as integer)
@@ -44,17 +44,24 @@ S--:S=0x1122334455660123, Stream ID (8 bytes)
 The issued command is almost the same as the one for advertising a stream. The
 only difference is `S--`.
 
+## Wait for listener: S??
+
+Command:
+```
+S??
+```
+
 
 # MRP commands for Listener
 
-## Report domain status
+## Report domain status: S+D
 
 Command:
 ```
 S+D:
 ```
 
-## Join stream: send Ready
+## Join Stream, send Ready: S+L
 
 Command:
 ```
@@ -62,7 +69,7 @@ S+L:L=1122334455660123, (Stream ID, 8 bytes)
     D=2 (Substate)
 ```
 
-## Leave stream
+## Leave stream: S-L
 
 Command:
 ```
