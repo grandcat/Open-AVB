@@ -109,64 +109,64 @@ static void help()
     exit(EXIT_FAILURE);
 }
 
-void pcap_callback(u_char* args, const struct pcap_pkthdr* packet_header, const u_char* packet)
-{
-    unsigned char* test_stream_id;
-    struct q_eth_hdr* eth_header;
-    uint32_t *buf;
-    uint32_t frame[2] = { 0 , 0 };
-    int i;
-    (void) args; /* unused */
-    (void) packet_header; /* unused */
+// Original single-thread packet processing
+//
+//void pcap_callback(u_char* args, const struct pcap_pkthdr* packet_header, const u_char* packet)
+//{
+//    unsigned char* test_stream_id;
+//    struct q_eth_hdr* eth_header;
+//    uint32_t *buf;
+//    uint32_t frame[2] = { 0 , 0 };
+//    int i;
+//    (void) args; /* unused */
+//    (void) packet_header; /* unused */
 
-#if DEBUG
-    fprintf(stdout,"Got packet.\n");
-#endif /* DEBUG*/
+//#if DEBUG
+//    fprintf(stdout,"Got packet.\n");
+//#endif /* DEBUG*/
 
-    eth_header = (struct q_eth_hdr*)(packet);
+//    eth_header = (struct q_eth_hdr*)(packet);
 
-#if DEBUG
-    fprintf(stdout,"Ether Type: 0x%02x%02x\n", eth_header->type[0], eth_header->type[1]);
-#endif /* DEBUG*/
+//#if DEBUG
+//    fprintf(stdout,"Ether Type: 0x%02x%02x\n", eth_header->type[0], eth_header->type[1]);
+//#endif /* DEBUG*/
 
-    if (0 == memcmp(glob_ether_type, eth_header->type, sizeof(eth_header->type)))
-    {
-        test_stream_id = (unsigned char*)(packet + ETHERNET_HEADER_SIZE + SEVENTEEN22_HEADER_PART1_SIZE);
+//    if (0 == memcmp(glob_ether_type, eth_header->type, sizeof(eth_header->type)))
+//    {
+//        test_stream_id = (unsigned char*)(packet + ETHERNET_HEADER_SIZE + SEVENTEEN22_HEADER_PART1_SIZE);
 
-#if DEBUG
-        fprint("Received stream id: %02x%02x%02x%02x%02x%02x%02x%02x\n ",
-                 test_stream_id[0], test_stream_id[1],
-                 test_stream_id[2], test_stream_id[3],
-                 test_stream_id[4], test_stream_id[5],
-                 test_stream_id[6], test_stream_id[7]);
-#endif /* DEBUG*/
+//#if DEBUG
+//        printf("Received stream ID: ");
+//        print_stream(test_stream_id);
 
-        if (0 == memcmp(test_stream_id, global_stream_id, sizeof(STREAM_ID_SIZE)))
-        {
+//#endif /* DEBUG*/
 
-#if DEBUG
-            fprintf(stdout,"Stream ids matched.\n");
-#endif /* DEBUG*/
-            buf = (uint32_t*) (packet + HEADER_SIZE);
-            for(i = 0; i < SAMPLES_PER_FRAME * CHANNELS; i += 2)
-            {
-                memcpy(&frame[0], &buf[i], sizeof(frame));
+//        if (0 == memcmp(test_stream_id, global_stream_id, sizeof(STREAM_ID_SIZE)))
+//        {
 
-                frame[0] = ntohl(frame[0]);   /* convert to host-byte order */
-                frame[1] = ntohl(frame[1]);
-                frame[0] &= 0x00ffffff;       /* ignore leading label */
-                frame[1] &= 0x00ffffff;
-                frame[0] <<= 8;               /* left-align remaining PCM-24 sample */
-                frame[1] <<= 8;
+//#if DEBUG
+//            fprintf(stdout,"Stream ids matched.\n");
+//#endif /* DEBUG*/
+//            buf = (uint32_t*) (packet + HEADER_SIZE);
+//            for(i = 0; i < SAMPLES_PER_FRAME * CHANNELS; i += 2)
+//            {
+//                memcpy(&frame[0], &buf[i], sizeof(frame));
 
-                sf_writef_int(glob_snd_file, (const int *)frame, 1);
-            }
-        }
-    }
-}
+//                frame[0] = ntohl(frame[0]);   /* convert to host-byte order */
+//                frame[1] = ntohl(frame[1]);
+//                frame[0] &= 0x00ffffff;       /* ignore leading label */
+//                frame[1] &= 0x00ffffff;
+//                frame[0] <<= 8;               /* left-align remaining PCM-24 sample */
+//                frame[1] <<= 8;
+
+//                sf_writef_int(glob_snd_file, (const int *)frame, 1);
+//            }
+//        }
+//    }
+//}
 
 static void
-initialize_accepted_streams
+init_accepted_streams
 (
     streamDesc_t **streams,
     int number_of_streams
@@ -183,8 +183,6 @@ initialize_accepted_streams
     {
         streamDesc_t *stream = &((*streams)[i]);
         // Assign stream description
-//        stream->streamInfo = (streamDesc_t *)calloc(sizeof(streamDesc_t), 1);
-//        assert(0 != stream->streamInfo);
         memcpy((stream->stream_ID), accepted_stream_ids[i], STREAM_ID_SIZE);
         stream->received_packets = 0;
         stream->spawned = 0;
@@ -198,7 +196,28 @@ initialize_accepted_streams
 }
 
 static void
-deinitialize_streams
+print_stream_statistics
+(
+    streamDesc_t **streams
+)
+{
+    int i;
+
+    for (i = 0; i < num_streams; ++i)
+    {
+        streamDesc_t *streamIter = &((*streams)[i]);
+        if (0 != streamIter->spawned)
+        {
+            printf("Stream ");
+            print_stream(streamIter->stream_ID);
+            // Note: thread has to be halted already before safe reading
+            printf("  - Received packets: %i\n", streamIter->received_packets);
+        }
+    }
+}
+
+static void
+fini_streams
 (
     streamDesc_t **streams
 )
@@ -238,14 +257,10 @@ pcap_parse_packet
     streamRxThread_t *thread_config = (streamRxThread_t *)arg;
     streamDesc_t *stream = thread_config->streamInfo;
 
-#if DEBUG
-    fprintf(stdout,"Got packet.\n");
-#endif /* DEBUG*/
-
     eth_header = (struct q_eth_hdr*)(packet);
 
 #if DEBUG
-    fprintf(stdout,"Ether Type: 0x%02x%02x\n", eth_header->type[0], eth_header->type[1]);
+    fprintf(stdout,"Got packet with ether type: 0x%02x%02x\n", eth_header->type[0], eth_header->type[1]);
 #endif /* DEBUG*/
 
     if (0 == memcmp(glob_ether_type, eth_header->type, sizeof(eth_header->type)))
@@ -254,9 +269,31 @@ pcap_parse_packet
         // Select only packets for owned streamID
         if (0 == memcmp(stream->stream_ID, found_streamID, STREAM_ID_SIZE))
         {
+            uint32_t *buf;
+            uint32_t frame[2] = {0 , 0};
+            int i;
+
             stream->received_packets++;
+#if DEBUG
             printf("T%i: got packet with my stream ID ", thread_config->threadID);
             print_stream(found_streamID);
+#endif /* DEBUG*/
+
+            // Copy audio test data to sndfile
+            buf = (uint32_t*) (packet + HEADER_SIZE);
+            for(i = 0; i < SAMPLES_PER_FRAME * CHANNELS; i += 2)
+            {
+                memcpy(&frame[0], &buf[i], sizeof(frame));
+
+                frame[0] = ntohl(frame[0]);   /* convert to host-byte order */
+                frame[1] = ntohl(frame[1]);
+                frame[0] &= 0x00ffffff;       /* ignore leading label */
+                frame[1] &= 0x00ffffff;
+                frame[0] <<= 8;               /* left-align remaining PCM-24 sample */
+                frame[1] <<= 8;
+
+                sf_writef_int(thread_config->snd_file_handle, (const int *)frame, 1);
+            }
         }
     }
 }
@@ -320,13 +357,13 @@ rx_thread(void *arg) {
     pcap_loop(thread_config->pcap_handle, -1, pcap_parse_packet, (u_char *)thread_config);
 
     free(sf_info);
-    printf("RX thread %i stopped.\n", thread_config->threadID);
+    printf("RX thread %i exited.\n", thread_config->threadID);
 
     return NULL;
 }
 
 static void
-manage_rx_threads()
+manage_rx_streams()
 {
     fprintf(stdout,"Waiting for talker(s)...\n");
     while (!halt)
@@ -355,12 +392,6 @@ void sigint_handler(int signum)
     fprintf(stdout,"Received signal %d:leaving...\n", signum);
     halt = 1;
 
-//    if (0 != talker) {
-//        ret = send_leave();
-//        if (ret)
-//            printf("send_leave failed\n");
-//    }
-
     if (2 > control_socket)
     {
         close(control_socket);
@@ -383,13 +414,10 @@ void sigint_handler(int signum)
         }
     }
 
-#if LIBSND
-//    sf_write_sync(glob_snd_file);
-//    sf_close(glob_snd_file);
-#endif /* LIBSND */
-
+    // Some statistics about the streams
+    print_stream_statistics(&streams);
     // Leave and cleanup streams
-    deinitialize_streams(&streams);
+    fini_streams(&streams);
 }
 
 int main(int argc, char *argv[])
@@ -420,15 +448,13 @@ int main(int argc, char *argv[])
     if ((NULL == dev) || (NULL == base_file_name))
         help();
 
-
-    initialize_accepted_streams(&streams, NUM_ACCEPTED_STREAMS);
-    // return errno;
-
     if (create_socket())
     {
         fprintf(stderr, "Socket creation failed.\n");
         return errno;
     }
+
+    init_accepted_streams(&streams, NUM_ACCEPTED_STREAMS);
 
     rc = report_domain_status();
     if (rc) {
@@ -443,41 +469,7 @@ int main(int argc, char *argv[])
     }
 
     // Find matching streams and spawn a thread for each unique stream ID
-    manage_rx_threads();
-
-//#if PCAP
-//    /* session, get session handler */
-//    /* take promiscuous vs. non-promiscuous sniffing? (0 or 1) */
-//    glob_pcap_handle = pcap_open_live(dev, BUFSIZ, 1, -1, errbuf);
-//    if (NULL == glob_pcap_handle)
-//    {
-//        fprintf(stderr, "Could not open device %s: %s\n", dev, errbuf);
-//        return EXIT_FAILURE;
-//    }
-
-//#if DEBUG
-//    fprintf(stdout,"Got session pcap handler.\n");
-//#endif /* DEBUG */
-//    /* compile and apply filter */
-//    if (-1 == pcap_compile(glob_pcap_handle, &comp_filter_exp, filter_exp, 0, PCAP_NETMASK_UNKNOWN))
-//    {
-//        fprintf(stderr, "Could not parse filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
-//        return EXIT_FAILURE;
-//    }
-
-//    if (-1 == pcap_setfilter(glob_pcap_handle, &comp_filter_exp))
-//    {
-//        fprintf(stderr, "Could not install filter %s: %s\n", filter_exp, pcap_geterr(glob_pcap_handle));
-//        return EXIT_FAILURE;
-//    }
-
-//#if DEBUG
-//    fprintf(stdout,"Compiled and applied filter.\n");
-//#endif /* DEBUG */
-
-//    /** loop forever and call callback-function for every received packet */
-//    pcap_loop(glob_pcap_handle, -1, pcap_callback, NULL);
-//#endif /* PCAP */
+    manage_rx_streams();
 
     return EXIT_SUCCESS;
 }
