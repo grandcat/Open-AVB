@@ -682,7 +682,8 @@ int main
         return EXIT_FAILURE;
     }
 
-    // Reservations on driver level for parallel class A and class B streams
+    // Reservations on driver level for parallel class A and class B streams.
+    // We actually use only class A at the moment.
     rc = igb_set_class_bandwidth
             (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG,
              PKT_SZ - 22, PKT_SZ - 22);
@@ -705,6 +706,9 @@ int main
     }
 
     // Prepare basic structure for all packets
+    //
+    // default_tx_packet is used as a reference for all packets enqueued for
+    // transmission.
     frame_size = sizeof(eth_header) + 4
                + sizeof(seventeen22_header) + sizeof(six1883_header);
 
@@ -868,7 +872,8 @@ int main
         // Busy waiting if no free packets are available
         //
         // * igb_clean returns list of already transmitted packets. These are the
-        //   free ones which can be used.
+        //   free ones which can be used. Busy waiting results from the lack of
+        //   available slots.
         // * These free items are associated with our free_packets list.
         // * Free packets are refilled and staged for transmission via xmit().
 

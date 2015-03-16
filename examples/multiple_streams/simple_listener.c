@@ -443,7 +443,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    if ((NULL == dev) || (NULL == base_file_name))
+    if (NULL == dev)
         help();
 
     if (create_socket())
