@@ -856,6 +856,7 @@ int main
             continue;
         }
 
+        // This part only met in rare cases
         if (ENOSPC == err) {
 
             /* put back for now */
@@ -864,7 +865,13 @@ int main
         }
 
     cleanup:
-        // Blocking function: will return empty list only after everything was sent
+        // Busy waiting if no free packets are available
+        //
+        // * igb_clean returns list of already transmitted packets. These are the
+        //   free ones which can be used.
+        // * These free items are associated with our free_packets list.
+        // * Free packets are refilled and staged for transmission via xmit().
+
         igb_clean(&igb_dev, &cleaned_packets);
         i = 0;
         while (cleaned_packets) {
