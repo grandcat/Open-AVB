@@ -14,10 +14,10 @@ Command:
 S++:S=1122334455660123, (Stream ID, 8 bytes)
     A=91E0F0000e800000, (Destination MAC, 6 bytes + 2 padding)
     V=0002, (VLAN ID, 2 bytes)
-    Z=00001500, (packet size as integer)
+    Z=00001500, (Packet size as integer)
     I=00000001, (TSpec interval as integer)
-    P=00300000, (priority and rank)
-    L=00003900  (latency as integer)
+    P=00300000, (Priority and rank)
+    L=00003900  (Latency as integer)
 ```
 * Stream ID has to be unique. It corresponds to the hexadecimal format without
   the leading "0x".
@@ -32,13 +32,13 @@ S++:S=1122334455660123, (Stream ID, 8 bytes)
 
 Command:
 ```
-S--:S=1122334455660123, Stream ID (8 bytes)
-    A=91E0F0000e800000, Destination MAC (6 bytes + 2 padding)
+S--:S=1122334455660123, (Stream ID, 8 bytes)
+    A=91E0F0000e800000, (Destination MAC, 6 bytes + 2 padding)
     V=0002, (VLAN ID, 2 bytes)
-    Z=00001500, (packet size as integer)
+    Z=00001500, (Packet size as integer)
     I=00000001, (TSpec interval as integer)
-    P=00300000, (priority and rank)
-    L=00003900  (latency as integer)
+    P=00300000, (Priority and rank)
+    L=00003900  (Latency as integer)
 ```
 
 The issued command is almost the same as the one for advertising a stream. The
@@ -58,7 +58,9 @@ S??
 
 Command:
 ```
-S+D:
+S+D:C=6,
+    P=3, (Priority?)
+    V=0002 (VLAN ID, 2 bytes)
 ```
 
 ## Join Stream, send Ready: S+L
@@ -68,12 +70,18 @@ Command:
 S+L:L=1122334455660123, (Stream ID, 8 bytes)
     D=2 (Substate)
 ```
+The substate *D* can have one of the following values:
+* 0: state ignore
+* 1: state askfailed
+* 2: state ready
+* 3: state readyfail
 
 ## Leave stream: S-L
 
 Command:
 ```
-S-L:
+S-L:L=1122334455660123, (Stream ID, 8 bytes)
+    D=3 (Substate)
 ```
 
 # General notes
