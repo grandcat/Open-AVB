@@ -62,7 +62,7 @@ extern unsigned char global_stream_id[8];
 int create_socket();
 int report_domain_status();
 int join_vlan();
-int mrp_retrieve_stream(streamDesc_t **matched_stream);
+int mrp_retrieve_stream(streamDesc_t** matched_stream);
 int await_talker();
 int send_ready(u_int8_t streamID[]);
 int send_leave(u_int8_t streamID[]);

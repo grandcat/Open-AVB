@@ -74,7 +74,7 @@
 #define L4_PORT ((uint16_t)5004)
 #define PKT_SZ (100)
 
-#define TX_QUEUE (0)                        //< tx-queue-0/1 for Class A / B traffic
+#define TX_QUEUE (0)                        //< tx-queue-0/1 for Class A/B traffic
 
 /******************************************************************************/
 /***   Type definitions                                                     ***/
@@ -511,7 +511,7 @@ int main
     struct igb_packet *tmp_packet;
     struct igb_packet *cleaned_packets;
     struct igb_packet *free_packets;
-    int current_listener_id;
+    uint current_listener_id;
     int c;
     u_int64_t last_time;
     int rc = 0;
@@ -685,8 +685,8 @@ int main
     // Reservations on driver level for parallel class A and class B streams.
     // We actually use only class A at the moment.
     rc = igb_set_class_bandwidth
-            (&igb_dev, 125000/L2_PACKET_IPG, 250000/L2_PACKET_IPG,
-             PKT_SZ - 22, PKT_SZ - 22);
+            (&igb_dev, 125000/L2_PACKET_IPG * num_streams, 0 * 250000/L2_PACKET_IPG,
+             PKT_SZ - 22, 0);
     if (rc) {
         printf("igb_set_class_bandwidth failed\n");
         return EXIT_FAILURE;
@@ -739,7 +739,7 @@ int main
         tmp_packet->vaddr += tmp_packet->offset;
         tmp_packet->next = free_packets;
 
-        // Default structure for each packet
+        // Apply default structure for each packet
         memcpy(((char *)tmp_packet->vaddr), default_tx_packet, frame_size);
         tmp_packet->len =
                 sizeof(eth_header) + 4 + sizeof(seventeen22_header) + sizeof(six1883_header) +
@@ -805,15 +805,16 @@ int main
         streamDesc_t *curStream;
 
         tmp_packet = free_packets;
+        // Busy waiting
+        // by jumping between here and cleanup if no free packet is available
         if (NULL == tmp_packet)
             goto cleanup;
         free_packets = tmp_packet->next;
 
         uint32_t timestamp_l;
-        get_samples( L2_SAMPLES_PER_FRAME, sample_buffer );
+        get_samples(L2_SAMPLES_PER_FRAME, sample_buffer);
         raw_tx_packet = (char *)tmp_packet->vaddr;
-        l2_header0 =
-                (seventeen22_header *) (raw_tx_packet + 18);
+        l2_header0 = (seventeen22_header *) (raw_tx_packet + 18);
         l2_header1 = (six1883_header *) (l2_header0 + 1);
 
         // Adapt package for current listener (if multiple)
@@ -827,19 +828,28 @@ int main
          * you get pre-empted between fetching the time
          * and programming the packet and get a late packet
          */
-        tmp_packet->attime = last_time + L2_PACKET_IPG;
-        last_time += L2_PACKET_IPG;
-        
+        // Local transmission time
+        tmp_packet->attime = last_time
+                + (u_int64_t)(L2_PACKET_IPG / num_streams) * (u_int64_t)current_listener_id;
+        // Presentation time in the network (established by 802.1AS daemon)
+        timestamp_l = time_stamp
+                + (u_int64_t)(L2_PACKET_IPG / num_streams) * (u_int64_t)current_listener_id;
+        l2_header0->timestamp = htonl(timestamp_l);
+
+        // Shift by one observation interval if one packet of each stream is
+        // transmitted in this round
+        if (current_listener_id == (num_streams - 1))
+        {
+            last_time += L2_PACKET_IPG;
+            time_stamp += L2_PACKET_IPG;
+        }
+
         l2_header0->seq_number = seqnum++;
         if (seqnum % 4 == 0)
             l2_header0->timestamp_valid = 0;
-        
         else
             l2_header0->timestamp_valid = 1;
-        
-        timestamp_l = time_stamp;
-        l2_header0->timestamp = htonl(timestamp_l);
-        time_stamp += L2_PACKET_IPG;
+
         l2_header1->data_block_continuity = total_samples;
         total_samples += L2_SAMPLES_PER_FRAME*CHANNELS;
         sample =
@@ -878,6 +888,7 @@ int main
         // * Free packets are refilled and staged for transmission via xmit().
 
         igb_clean(&igb_dev, &cleaned_packets);
+        // Inverse direction
         i = 0;
         while (cleaned_packets) {
             i++;

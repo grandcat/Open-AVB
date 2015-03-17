@@ -110,7 +110,7 @@ int msg_match_streams
         }
         if (!parseErr && res)
         {
-            // Keep this variable for legacy reasons like jackd talker
+            // Keep this global variable for legacy reasons like jackd talker
             talker = 1;
         }
     }
