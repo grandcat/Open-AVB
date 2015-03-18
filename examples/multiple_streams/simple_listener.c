@@ -36,8 +36,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #define VERSION_STR "0.1"
 
-#define REQ_STREAM_DST_MAC0 "91:E0:F0:00:0e:80"
-#define REQ_STREAM_DST_MAC1 "91:E0:F0:00:0e:81"
+#define REQ_STREAM_DST_MAC0 "91:e0:f0:00:0e:80"
+#define REQ_STREAM_DST_MAC1 "91:e0:f0:00:0e:81"
 
 #define ETHERNET_HEADER_SIZE (18)
 #define SEVENTEEN22_HEADER_PART1_SIZE (4)
@@ -73,7 +73,9 @@ static const char* version_str = "simple_listener v" VERSION_STR "\n"
 
 const unsigned char accepted_stream_ids[NUM_ACCEPTED_STREAMS][8] = {
     {0xa0, 0x36, 0x9f, 0x4c, 0x92, 0x55, 0x00, 0x00},
-    {0xa0, 0x36, 0x9f, 0x4c, 0x92, 0x55, 0x00, 0x01}
+    {0xa0, 0x36, 0x9f, 0x4c, 0x92, 0x55, 0x00, 0x01},
+    {0xa0, 0x36, 0x9f, 0x4f, 0x4f, 0xf8, 0x00, 0x00},
+    {0xa0, 0x36, 0x9f, 0x4f, 0x4f, 0xf8, 0x00, 0x01},
 };
 
 char filter_exp[] = "ether dst " REQ_STREAM_DST_MAC0

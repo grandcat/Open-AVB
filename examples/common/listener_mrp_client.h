@@ -44,7 +44,7 @@ typedef struct streamDesc_s {
     int received_packets;
 } streamDesc_t;
 
-#define NUM_ACCEPTED_STREAMS 2
+#define NUM_ACCEPTED_STREAMS 4
 extern const unsigned char accepted_stream_ids[NUM_ACCEPTED_STREAMS][8];
 
 extern streamDesc_t *streams;
