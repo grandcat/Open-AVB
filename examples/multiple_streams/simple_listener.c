@@ -298,11 +298,15 @@ rx_thread(void* arg) {
     }
     printf("RX thread %i: created file called %s\n", thread_config->threadID, filename);
 
-    // Start packet processing loop (blocking)
+    // Start packet processing loop (blocking call)
     pcap_loop(thread_config->pcap_handle, -1, pcap_parse_packet, (u_char *)thread_config);
 
+    // PCAP loop was interrupted: sync output file and finish up
+    printf("RX thread %i stopped: finish output file.\n", thread_config->threadID);
+    sf_write_sync(thread_config->snd_file_handle);
+    sf_close(thread_config->snd_file_handle);
+
     free(sf_info);
-    printf("RX thread %i exited.\n", thread_config->threadID);
 
     return NULL;
 }
@@ -354,8 +358,7 @@ void sigint_handler(int signum)
             pcap_breakloop(rxThread->pcap_handle);
             pcap_close(rxThread->pcap_handle);
 
-            sf_write_sync(rxThread->snd_file_handle);
-            sf_close(rxThread->snd_file_handle);
+            pthread_join(rxThread->threadHandle, NULL);
         }
     }
 
