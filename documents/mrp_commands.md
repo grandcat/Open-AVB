@@ -14,8 +14,8 @@ Command:
 S++:S=1122334455660123, (Stream ID, 8 bytes)
     A=91E0F0000e800000, (Destination MAC, 6 bytes + 2 padding)
     V=0002, (VLAN ID, 2 bytes)
-    Z=00001500, (Packet size as integer)
-    I=00000001, (TSpec interval as integer)
+    Z=00001500, (TSpec: max packet size as integer)
+    I=00000001, (TSpec: max interval frames as integer)
     P=00300000, (Priority and rank)
     L=00003900  (Latency as integer)
 ```
@@ -35,8 +35,8 @@ Command:
 S--:S=1122334455660123, (Stream ID, 8 bytes)
     A=91E0F0000e800000, (Destination MAC, 6 bytes + 2 padding)
     V=0002, (VLAN ID, 2 bytes)
-    Z=00001500, (Packet size as integer)
-    I=00000001, (TSpec interval as integer)
+    Z=00001500, (TSpec: max packet size as integer)
+    I=00000001, (TSpec: max interval frames as integer)
     P=00300000, (Priority and rank)
     L=00003900  (Latency as integer)
 ```
