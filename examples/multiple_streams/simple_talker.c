@@ -506,7 +506,6 @@ int main
     int igb_shm_fd = -1;
     char *igb_mmap = NULL;
     struct igb_dma_alloc a_page;
-    struct igb_dma_alloc b_page;
     struct igb_packet a_packet;
     struct igb_packet *tmp_packet;
     struct igb_packet *cleaned_packets;
@@ -596,8 +595,6 @@ int main
         return errno;
     }
     err = igb_dma_malloc_page(&igb_dev, &a_page);
-    err += igb_dma_malloc_page(&igb_dev, &b_page);
-    // printf("DMA page A:%" PRIu64 ", B:%" PRIu64 "\n", a_page.dma_paddr, b_page.dma_paddr);
     if (err) {
         printf("malloc failed (%s) - out of memory?\n",
                strerror(errno));
@@ -917,8 +914,6 @@ int main
         printf("mrp_disconnect failed\n");
 
     igb_dma_free_page(&igb_dev, &a_page);
-    igb_dma_free_page(&igb_dev, &b_page);
-    rc = gptpdeinit(&igb_shm_fd, &igb_mmap);
     err = igb_detach(&igb_dev);
 
     pthread_exit(NULL);
